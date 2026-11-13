@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
 
 from .errors import ConfigError
 from .timeutil import get_zone
@@ -34,11 +34,23 @@ class DetectorSettings(_Strict):
     kind: Literal["yolo"] = "yolo"
     weights: str = "models/yolo12x.pt"
     imgsz: int = Field(1920, ge=320)
-    conf: float = Field(0.25, gt=0, lt=1)
+    conf: float = Field(0.25, gt=0, lt=1)            # counting threshold: boxes at or above it are counted
+    store_conf: float = Field(0.05, gt=0, lt=1)      # storage floor: every box down to here is kept, uncounted
+    class_conf: dict[str, float] = {}                # per-label counting threshold overrides (set from labels)
     iou: float = Field(0.5, gt=0, lt=1)
     dedupe_labels: list[str] = ["person"]
     dedupe_containment: float = Field(0.8, gt=0, le=1)
     dedupe_same_label_iou: float = Field(0.6, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _thresholds_above_floor(self) -> "DetectorSettings":
+        for name, v in {"conf": self.conf, **{f"class_conf[{k}]": v for k, v in self.class_conf.items()}}.items():
+            if not self.store_conf <= v < 1:
+                raise ValueError(f"detector.{name}={v} must be >= store_conf ({self.store_conf}) and < 1")
+        return self
+
+    def count_threshold(self, label: str) -> float:
+        return self.class_conf.get(label, self.conf)
 
 
 class SceneReaderSettings(_Strict):
@@ -75,6 +87,14 @@ class TableSettings(_Strict):
     always_include: list[str] = []
     min_autocorr: float = Field(0.3, ge=-1, le=1)
     autocorr_min_slots: int = Field(96, ge=3)        # smoothness filter only once there is ~1 day of slots
+    conf_levels: list[float] = [0.05, 0.10]          # extra detector thresholds to count at (count.yolo_cNN.*)
+
+    @field_validator("conf_levels")
+    @classmethod
+    def _levels(cls, v: list[float]) -> list[float]:
+        if any(not 0 < x < 1 for x in v) or len({round(x * 100) for x in v}) != len(v):
+            raise ValueError("conf_levels must be distinct values in (0, 1), two decimals at most")
+        return sorted(v)
 
 
 class BaselineSettings(_Strict):

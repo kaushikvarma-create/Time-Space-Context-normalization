@@ -18,7 +18,9 @@ detector:                       # kind: yolo
   kind: yolo
   weights: models/yolo12x.pt
   imgsz: 1920
-  conf: 0.25
+  conf: 0.25                    # counting threshold: boxes at or above it are counted (observations, baselines)
+  store_conf: 0.05              # storage floor: every box down to here is kept in `detections`, uncounted
+  class_conf: {}                # per-label counting thresholds, e.g. {motorcycle: 0.10}; set these from labels
   iou: 0.5
   dedupe_labels: [person]       # labels where a box mostly inside a stronger box is dropped
   dedupe_containment: 0.8
@@ -58,3 +60,4 @@ table:                          # the Chronos-ready table (sbi table)
   always_include: [scene.people_vlm, scene.people_yolo, scene.vehicles_yolo, count.vlm.motorcycle, count.yolo.car]
   min_autocorr: 0.3             # default inputs must change smoothly (real) rather than flicker (noise)
   autocorr_min_slots: 96        # ...but only once there is about a day of slots to estimate that reliably
+  conf_levels: [0.05, 0.10]     # extra detector thresholds to count at: count.yolo_c05.<type>, count.yolo_c10.<type>

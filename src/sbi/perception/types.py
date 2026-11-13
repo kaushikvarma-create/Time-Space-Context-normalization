@@ -19,6 +19,7 @@ class Detection:
     label: str            # already mapped to the space's canonical vocabulary
     conf: float
     bbox: BBox            # normalised [x1, y1, x2, y2]
+    counted: bool = True  # False = below the counting threshold: stored as a raw detection, never counted
 
 
 @dataclass(frozen=True)
@@ -52,14 +53,19 @@ class SceneReading:
 
 class Detector(Protocol):
     version: str
+    min_conf: float       # lowest confidence it returns (the storage floor), recorded per frame
 
     def detect(self, image: np.ndarray, space: SpaceConfig) -> list[Detection]:
-        """Raise DetectorError on failure."""
+        """Every box down to min_conf; `counted` marks the ones above the counting threshold.
+        Raise DetectorError on failure."""
 
 
 class SceneReader(Protocol):
     def read(self, image: np.ndarray, space: SpaceConfig) -> SceneReading:
         """Raise VLMError on failure (after any retries)."""
+
+    def parse(self, raw: str, space: SpaceConfig) -> SceneReading:
+        """Rebuild a reading from a stored raw answer (no model call). Raise ValueError if unusable."""
 
 
 class FrameSource(Protocol):

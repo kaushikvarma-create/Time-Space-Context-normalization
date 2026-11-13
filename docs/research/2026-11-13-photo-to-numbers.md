@@ -230,3 +230,8 @@ they work. A few weeks of data, including evenings and weekends, is needed.
     - Drawn on the image, most 0.05–0.25 boxes sit on real, distinct bikes in the packed rows; a few are nested or overlapping.
     - Cabin frame 23 at ≥0.05 adds plausible extras (chairs 7→11, monitors 5→9), some of which are probably duplicates.
     - The threshold must be chosen per class from labelled frames, not by eye from one image. This supports storing all boxes ≥0.05 with their confidence and counting at several thresholds; SAM 2 mask overlap can remove nested duplicates.
+- **Implemented the same day (migration 004):**
+  - YOLO now runs at a 0.05 floor and every box is stored in `detections`. The counted set (≥0.25) is unchanged; a detector-only reprocess of all 62 stored frames left counted boxes, VLM rows, relations and scene state identical.
+  - New table columns: `count.yolo_c05|c10.<type>` and `area.yolo*.<type>` (union of boxes as a share of the image, a stand-in for mask area until SAM 2 is added).
+  - `sbi stability` reports how much each count wobbles in a quiet window. It needs night data to mean anything.
+  - First day, daytime only (not a quiet window): parking motorcycles average 9.1 at ≥0.25, 13.1 at ≥0.10, 18.4 at ≥0.05, and 15.6 from the VLM.

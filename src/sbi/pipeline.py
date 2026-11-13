@@ -4,6 +4,9 @@ Design:
   * Slow work (detector, VLM) runs BEFORE any write transaction, so the DB lock is held only briefly.
   * All rows for a frame are written in ONE transaction: a failure leaves the frame exactly as it was.
   * Re-running a frame replaces its previous results (re-extract old images with a new prompt/model).
+  * Every detector box is stored as a raw detection; only boxes marked `counted` become observations, links
+    and people/vehicle totals. Thresholds can therefore change later without re-running the model.
+  * replay_vlm=True re-runs the detector only: the VLM part is rebuilt from the stored raw answer, unchanged.
   * VLMError is handled (frame kept with detector results, VLM fields NULL: missing is not zero).
     DetectorError and everything else propagate: the frame stays unprocessed and is retried from the backlog.
 """
@@ -12,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -41,12 +44,29 @@ class FrameResult:
     reason: str | None = None          # why it was skipped
     people_yolo: int | None = None
     people_vlm: int | None = None
-    boxes: int = 0
+    boxes: int = 0                     # counted boxes
+    boxes_stored: int = 0              # all raw detections, counted or not
     vlm_ok: bool = False
 
 
+def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tuple[SceneReading | None, str | None]:
+    """The frame's VLM result as it was stored: (reading, None), (None, error text) or (None, None)."""
+    raw = frame["vlm_raw"]
+    if raw is None:
+        return None, None
+    if raw.startswith('{"error"'):
+        return None, json.loads(raw).get("error")
+    if reader is None:
+        raise StorageError("replaying a stored VLM answer needs a scene reader to parse it")
+    try:
+        reading = reader.parse(raw, space)
+    except (ValueError, KeyError, TypeError) as e:
+        raise StorageError(f"frame {frame['frame_id']}: stored VLM answer cannot be replayed: {e}") from e
+    return replace(reading, model=frame["vlm_model"], prompt_version=frame["prompt_version"]), None
+
+
 def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, reader: SceneReader | None, *,
-                  root: Path) -> FrameResult:
+                  root: Path, replay_vlm: bool = False) -> FrameResult:
     frame = get_frame(conn, frame_id)
     if frame is None:
         raise StorageError(f"frame {frame_id} does not exist")
@@ -61,7 +81,9 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
 
     reading: SceneReading | None = None
     vlm_error: str | None = None
-    if reader is not None:
+    if replay_vlm:
+        reading, vlm_error = _stored_reading(frame, space, reader)     # StorageError propagates; nothing written
+    elif reader is not None:
         try:
             reading = reader.read(img, space)
         except VLMError as e:
@@ -70,15 +92,21 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
                         space.space_id, frame_id, vlm_error)
 
     with transaction(conn):
-        return _write(conn, space, frame, detections, reading, vlm_error, detector.version)
+        return _write(conn, space, frame, detections, reading, vlm_error, detector)
 
 
-def _write(conn, space: SpaceConfig, frame, detections: list[Detection], reading: SceneReading | None,
-           vlm_error: str | None, detector_version: str) -> FrameResult:
+def _write(conn, space: SpaceConfig, frame, all_detections: list[Detection], reading: SceneReading | None,
+           vlm_error: str | None, detector: Detector) -> FrameResult:
     fid, sid, ts = frame["frame_id"], frame["space_id"], frame["ts_utc"]
     results.clear_frame_results(conn, fid)
 
-    # detector rows: counts, boxes, grid cell (position is geometric; the VLM never sees the grid)
+    # raw layer: every box the detector returned, with its confidence (position is geometric; the VLM never
+    # sees the grid). Counted boxes also become observations below.
+    for d in all_detections:
+        cell = bbox_to_cell(d.bbox, space.grid.cols, space.grid.rows, space.grid.anchor)
+        results.insert_detection(conn, frame_id=fid, space_id=sid, ts_utc=ts, raw_label=d.label, confidence=d.conf,
+                                 bbox=d.bbox, cell_id=cell[2], counted=d.counted)
+    detections = [d for d in all_detections if d.counted]
     for d in detections:
         label, _ = canonical(conn, d.label, space_id=sid, frame_id=fid, ts_utc=ts)
         cell = bbox_to_cell(d.bbox, space.grid.cols, space.grid.rows, space.grid.anchor)
@@ -131,10 +159,13 @@ def _write(conn, space: SpaceConfig, frame, detections: list[Detection], reading
                                  details={"prev": prev, "now": now_n})
 
     results.mark_processed(
-        conn, fid, detector_version=detector_version, vlm_model=reading.model if reading else None,
+        conn, fid, detector_version=detector.version, detector_min_conf=detector.min_conf,
+        vlm_model=reading.model if reading else None,
         prompt_version=reading.prompt_version if reading else None,
-        detector_raw=json.dumps([{"label": d.label, "conf": d.conf, "bbox": list(d.bbox)} for d in detections]),
+        detector_raw=json.dumps([{"label": d.label, "conf": d.conf, "bbox": list(d.bbox), "counted": d.counted}
+                                 for d in all_detections]),
         vlm_raw=reading.raw if reading else (json.dumps({"error": vlm_error}) if vlm_error else None),
         processed_utc=now_utc().isoformat(timespec="seconds"))
     return FrameResult(fid, True, people_yolo=people_yolo, people_vlm=people_vlm, boxes=len(detections),
+                       boxes_stored=len(all_detections),
                        vlm_ok=reading is not None)

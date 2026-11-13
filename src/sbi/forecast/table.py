@@ -18,23 +18,40 @@ Column families (prefix.source.name):
   img.*    measured image statistics                             cat.*    categorical scene fields (strings)
   count.yolo|vlm.<type>      rollup.yolo|vlm.<parent>  (parent + all is_a descendants)
   cell.yolo.<cell>.<type>    rel.vlm|geometry.<subject>.<predicate>.<object>      feat.<name> (frame_features)
+  area.yolo.<type>           share of the image covered by that type's counted boxes (overlaps counted once)
+
+Detector threshold variants: `yolo` is the counted set (detector.conf / class_conf). For every level in
+table.conf_levels there is also count.yolo_cNN.<type> and area.yolo_cNN.<type>, built from ALL stored boxes with
+confidence >= 0.NN. They are NaN for frames processed before low-confidence boxes were stored (unknown, not
+zero). Variants are marked in the catalog and never picked as default model inputs: which threshold is right
+per object type is decided from human labels, not here.
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from ..errors import SbiError
+from ..perception.geometry import union_area
 from ..taxonomy import Taxonomy, load_taxonomy
 
 META = ["slot_status", "frame_id", "vlm_ok"]
 CAT_COLUMNS = ["lighting", "door_state", "tidiness", "weather_visible"]
-COUNT_KINDS = {"count", "rollup", "cell", "rel"}
+COUNT_KINDS = {"count", "rollup", "cell", "rel", "area"}
+OBJECT_KINDS = {"count", "rollup", "cell", "area"}       # families whose last name part is an object type
+_VARIANT = re.compile(r"^yolo_c\d\d$")
+
+
+def level_source(level: float) -> str:
+    """Source token for a detector confidence level: 0.05 -> 'yolo_c05'."""
+    return f"yolo_c{round(level * 100):02d}"
 
 
 @dataclass(frozen=True)
@@ -52,7 +69,7 @@ def calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
 
 def _pick_frames(conn: sqlite3.Connection, space_id: str, tz: str, step: int) -> pd.DataFrame:
     f = pd.read_sql_query("SELECT frame_id, ts_utc, capture_status, processed_utc, vlm_raw, brightness, contrast, "
-                          "sharpness FROM frames WHERE space_id=?", conn, params=(space_id,))
+                          "sharpness, detector_min_conf FROM frames WHERE space_id=?", conn, params=(space_id,))
     if f.empty:
         raise SbiError(f"no frames stored for space {space_id!r}")
     local = pd.to_datetime(f["ts_utc"], utc=True).dt.tz_convert(tz).dt.tz_localize(None)
@@ -72,7 +89,7 @@ def _name(tax: Taxonomy, raw: str | None, fallback: str) -> str:
 def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minutes: int = 15,
                 start: str | None = None, end: str | None = None, min_coverage: float = 0.5,
                 min_presence: float = 0.05, min_valid_slots: int = 8, min_present_slots: int = 3,
-                exclude_labels: tuple[str, ...] = ()) -> TableResult:
+                exclude_labels: tuple[str, ...] = (), conf_levels: tuple[float, ...] = ()) -> TableResult:
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
@@ -84,6 +101,9 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     valid = t["slot_status"] == "ok"
     vlm_ok = valid & t["vlm_ok"]
     t = t.join(calendar(index))
+
+    floor = pd.to_numeric(frames["detector_min_conf"], errors="coerce").reindex(index)
+    level_ok = {level_source(lv): valid & (floor <= lv + 1e-9) for lv in conf_levels}   # was the frame read that low?
 
     fid_slot = {int(fid): slot for slot, fid in t.loc[valid, "frame_id"].items()}
     blocks: dict[str, pd.Series] = {}
@@ -104,6 +124,21 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 add(f"rollup.{src}.{anc}", slot, n)
             if src == "yolo" and cell:
                 add(f"cell.yolo.{cell}.{name}", slot, n)
+        boxes: dict[tuple[str, str, object], list] = defaultdict(list)       # (source, name, slot) -> boxes
+        for fid, otype, raw, bbox in conn.execute(
+                f"SELECT frame_id, object_type, raw_label, bbox_norm FROM observations "
+                f"WHERE source='yolo' AND bbox_norm IS NOT NULL AND frame_id IN ({marks})", ids):
+            boxes[("yolo", _name(tax, raw, otype), fid_slot[fid])].append(json.loads(bbox))
+        if conf_levels:
+            for fid, raw, conf, bbox in conn.execute(
+                    f"SELECT frame_id, raw_label, confidence, bbox_norm FROM detections WHERE frame_id IN ({marks})", ids):
+                slot, name = fid_slot[fid], _name(tax, raw, raw)
+                for lv in conf_levels:
+                    if conf >= lv:
+                        add(f"count.{level_source(lv)}.{name}", slot, 1)
+                        boxes[(level_source(lv), name, slot)].append(json.loads(bbox))
+        for (src, name, slot), bs in boxes.items():
+            add(f"area.{src}.{name}", slot, round(union_area(bs), 5))
         for fid, src, s, p, o, rs, ro, n in conn.execute(
                 f"SELECT frame_id, source, subject, predicate, object, raw_subject, raw_object, count FROM relations "
                 f"WHERE frame_id IN ({marks})", ids):
@@ -118,7 +153,7 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     counts = pd.DataFrame(blocks, index=index)
     for col in counts.columns:                       # 0 only where the source actually looked; NaN otherwise
         src = col.split(".")[1]
-        counts.loc[~(vlm_ok if src == "vlm" else valid), col] = np.nan
+        counts.loc[~(vlm_ok if src == "vlm" else level_ok.get(src, valid)), col] = np.nan
 
     scene = pd.read_sql_query(
         "SELECT frame_id, people_yolo, people_vlm, vehicles_yolo, count_disagree, lighting, door_state, tidiness, "
@@ -143,8 +178,8 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
 
     def family(prefix: str) -> list[str]:
         return sorted(c for c in counts.columns if c.startswith(prefix))
-    ordered = pd.concat([num.reindex(index), img, counts[family("count.")], counts[family("rollup.")],
-                         counts[family("cell.")], counts[family("rel.")], cats, feat_w], axis=1)
+    ordered = pd.concat([num.reindex(index), img, counts[family("count.")], counts[family("area.")],
+                         counts[family("rollup.")], counts[family("cell.")], counts[family("rel.")], cats, feat_w], axis=1)
     table = pd.concat([t, ordered], axis=1)
     return TableResult(table, _catalog(table, min_coverage, min_presence, min_valid_slots, min_present_slots,
                                        frozenset(exclude_labels)))
@@ -169,7 +204,7 @@ def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_
             warnings.simplefilter("ignore", RuntimeWarning)       # constant stretches make autocorr undefined
             ac = float(s.autocorr(1)) if numeric and len(nn) > 2 and std > 0 else np.nan
         distinct = int(nn.nunique())
-        obj = parts[-1] if kind in ("count", "rollup", "cell") else None
+        obj = parts[-1] if kind in OBJECT_KINDS else None
         if kind == "cal":
             ready, why = True, "known in advance"
         elif obj in exclude_labels:
@@ -185,6 +220,7 @@ def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_
         else:
             ready, why = True, "ok"
         rows.append({"column": col, "kind": kind, "source": source, "known_future": kind == "cal",
+                     "variant": bool(_VARIANT.match(source)),
                      "coverage": round(coverage, 3), "valid_slots": len(nn), "present_slots": present,
                      "presence": None if np.isnan(presence) else round(presence, 3),
                      "mean": round(float(nn.mean()), 3) if numeric and len(nn) else None,
@@ -198,11 +234,13 @@ def select_covariates(catalog: pd.DataFrame, *, targets: list[str], max_covariat
                       min_autocorr: float, autocorr_min_slots: int) -> list[str]:
     """Default model inputs: `always` columns (if eligible), then eligible columns ranked by smoothness
     (lag-1 autocorrelation; real occupancy changes smoothly, model noise flickers) and coverage.
+    Threshold variants (count.yolo_cNN.*) are near-copies of the counted series, so they are only used when
+    named in `always`; otherwise they would crowd real inputs out of the cap.
     Smoothness only filters once there are enough slots to estimate it (about +-0.23 noise at 19 slots).
     Every other column stays in the table; this only picks what a model gets by default."""
     ready = catalog[catalog["model_ready"] & (catalog["kind"] != "cal") & ~catalog["column"].isin(targets)].copy()
     chosen = [c for c in always if c in set(ready["column"])]
-    rest = ready[~ready["column"].isin(chosen)].copy()
+    rest = ready[~ready["column"].isin(chosen) & ~ready["variant"]].copy()
     rest["ac"] = rest["autocorr1"].astype(float).fillna(0.0)
     if len(catalog) and catalog["valid_slots"].max() >= autocorr_min_slots:
         rest = rest[(rest["kind"] == "cat") | (rest["ac"] >= min_autocorr)]

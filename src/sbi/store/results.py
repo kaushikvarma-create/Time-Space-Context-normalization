@@ -12,6 +12,7 @@ def clear_frame_results(conn: sqlite3.Connection, frame_id: int) -> None:
     """Remove a frame's previous results so re-extraction replaces them. new_object_type events are kept
     (the registry rows they describe are kept too)."""
     conn.execute("DELETE FROM observations WHERE frame_id=?", (frame_id,))
+    conn.execute("DELETE FROM detections WHERE frame_id=?", (frame_id,))
     conn.execute("DELETE FROM relations WHERE frame_id=?", (frame_id,))
     conn.execute("DELETE FROM scene_state WHERE frame_id=?", (frame_id,))
     conn.execute("DELETE FROM events WHERE frame_id=? AND event_type!='new_object_type'", (frame_id,))
@@ -28,6 +29,14 @@ def insert_observation(conn: sqlite3.Connection, *, frame_id: int, space_id: str
         (frame_id, space_id, ts_utc, object_type, raw_label or object_type, col, row, cid,
          json.dumps(list(bbox)) if bbox else None, status, count, confidence, source,
          json.dumps(attrs) if attrs else None))
+
+
+def insert_detection(conn: sqlite3.Connection, *, frame_id: int, space_id: str, ts_utc: str, raw_label: str,
+                     confidence: float, bbox: BBox, cell_id: str | None, counted: bool) -> None:
+    """One raw detector box (counted or not). Counted boxes are also stored as observations."""
+    conn.execute("INSERT INTO detections(frame_id,space_id,ts_utc,raw_label,confidence,bbox_norm,cell_id,counted) "
+                 "VALUES(?,?,?,?,?,?,?,?)",
+                 (frame_id, space_id, ts_utc, raw_label, confidence, json.dumps(list(bbox)), cell_id, int(counted)))
 
 
 def insert_relation(conn: sqlite3.Connection, *, frame_id: int, space_id: str, ts_utc: str, subject: str,
@@ -66,8 +75,10 @@ def insert_event(conn: sqlite3.Connection, *, space_id: str, ts_utc: str, frame_
                  (space_id, ts_utc, frame_id, event_type, json.dumps(details) if details else None))
 
 
-def mark_processed(conn: sqlite3.Connection, frame_id: int, *, detector_version: str, vlm_model: str | None,
-                   prompt_version: str | None, detector_raw: str, vlm_raw: str | None, processed_utc: str) -> None:
-    conn.execute("""UPDATE frames SET detector_version=?, vlm_model=?, prompt_version=?, detector_raw=?, vlm_raw=?,
-                      processed_utc=? WHERE frame_id=?""",
-                 (detector_version, vlm_model, prompt_version, detector_raw, vlm_raw, processed_utc, frame_id))
+def mark_processed(conn: sqlite3.Connection, frame_id: int, *, detector_version: str, detector_min_conf: float | None,
+                   vlm_model: str | None, prompt_version: str | None, detector_raw: str, vlm_raw: str | None,
+                   processed_utc: str) -> None:
+    conn.execute("""UPDATE frames SET detector_version=?, detector_min_conf=?, vlm_model=?, prompt_version=?,
+                      detector_raw=?, vlm_raw=?, processed_utc=? WHERE frame_id=?""",
+                 (detector_version, detector_min_conf, vlm_model, prompt_version, detector_raw, vlm_raw,
+                  processed_utc, frame_id))

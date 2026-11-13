@@ -145,6 +145,9 @@ class LmStudioSceneReader:
             payload["reasoning_effort"] = c.reasoning_effort
         return payload
 
+    def parse(self, raw: str, space: SpaceConfig) -> SceneReading:
+        return parse_reading(raw, space, model=self.cfg.model, latency_s=0.0)
+
     def read(self, image: np.ndarray, space: SpaceConfig) -> SceneReading:
         url = f"{self.cfg.base_url.rstrip('/')}/v1/chat/completions"
         payload = self._payload(image, space)

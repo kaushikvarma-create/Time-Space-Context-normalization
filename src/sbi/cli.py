@@ -3,11 +3,13 @@
   tick        capture + process every space in config/spaces/ (what cron runs)
   migrate     apply pending database migrations
   baseline    rebuild baselines (all buckets) for one or all spaces
-  reprocess   re-run Engine 1 on stored frames (e.g. after a prompt or model change)
+  reprocess   re-run Engine 1 on stored frames (e.g. after a prompt or model change);
+              --detector-only re-runs the detector and keeps each frame's stored VLM answer as it is
   eval        accuracy report against human labels
   curate      find synonym ('same') and hierarchy ('is_a') links between object names, apply them, re-map history
   links       list taxonomy links            link-set ID approved|rejected   human decision (reversible)
   table       build the Chronos-ready table + column catalog for a space (CSV in data/exports/)
+  stability   label-free noise check: how steady each count is inside a quiet window (e.g. night)
 
 Exit codes: 0 ok, 1 some spaces failed, 2 fatal setup/config error.
 """
@@ -44,6 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     r = sub.add_parser("reprocess"); r.add_argument("--space", required=True)
     r.add_argument("--frame-id", type=int, action="append", help="repeatable; default: all processed frames")
     r.add_argument("--no-vlm", action="store_true")
+    r.add_argument("--detector-only", action="store_true", help="keep the stored VLM answer; no VLM call")
     sub.add_parser("eval")
     cu = sub.add_parser("curate"); cu.add_argument("--no-auto-approve", action="store_true")
     li = sub.add_parser("links"); li.add_argument("--status", choices=["proposed", "approved", "rejected"])
@@ -51,11 +54,25 @@ def _parser() -> argparse.ArgumentParser:
     ls.add_argument("status", choices=["approved", "rejected"])
     ta = sub.add_parser("table"); ta.add_argument("--space", required=True)
     ta.add_argument("--start"); ta.add_argument("--end"); ta.add_argument("--out", default="data/exports")
+    sb = sub.add_parser("stability"); sb.add_argument("--space", required=True)
+    sb.add_argument("--start", help="quiet window start, local time, e.g. '2026-11-14 00:00'")
+    sb.add_argument("--end", help="quiet window end, local time")
+    sb.add_argument("--min-mean", type=float, default=0.0, help="hide columns whose window mean is below this")
+    sb.add_argument("--out", default="data/exports")
     return p
 
 
 def _spaces_by_id(root: Path):
     return {s.space_id: s for s in (load_space(f) for f in discover_space_files(root))}
+
+
+def _build_table(conn, settings, space, start=None, end=None):
+    from .forecast.table import build_table
+    tc = settings.table
+    return build_table(conn, space.space_id, tz=space.tz, step_minutes=tc.step_minutes, start=start, end=end,
+                       min_coverage=tc.min_coverage, min_presence=tc.min_presence,
+                       min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
+                       exclude_labels=tuple(tc.exclude_labels), conf_levels=tuple(tc.conf_levels))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -86,12 +103,23 @@ def main(argv: list[str] | None = None) -> int:
                 if space is None:
                     raise SbiError(f"unknown space {args.space!r}")
                 detector = build_detector(settings.detector, settings.root)
+                if args.detector_only and args.no_vlm:
+                    raise SbiError("--detector-only keeps the stored VLM answers; it cannot be combined with --no-vlm")
                 reader = None if args.no_vlm else build_scene_reader(settings.scene_reader)
                 ids = args.frame_id or [r[0] for r in conn.execute(
                     "SELECT frame_id FROM frames WHERE space_id=? AND capture_status='ok' ORDER BY ts_utc",
                     (args.space,))]
-                done = sum(process_frame(conn, space, i, detector, reader, root=settings.root).processed for i in ids)
-                log.info("reprocessed %d/%d frames", done, len(ids))
+                done, failed = 0, 0
+                for i in ids:
+                    try:
+                        done += process_frame(conn, space, i, detector, reader, root=settings.root,
+                                              replay_vlm=args.detector_only).processed
+                    except SbiError as e:      # that frame is left exactly as it was; keep going
+                        failed += 1
+                        log.error("frame %d not reprocessed: %s", i, e)
+                log.info("reprocessed %d/%d frames%s", done, len(ids), f", {failed} failed" if failed else "")
+                if failed:
+                    return 1
             elif args.cmd == "eval":
                 print(report(conn))
             elif args.cmd == "curate":
@@ -118,15 +146,11 @@ def main(argv: list[str] | None = None) -> int:
                 except ValueError as e:
                     raise SbiError(str(e)) from e
             elif args.cmd == "table":
-                from .forecast.table import build_table
                 space = _spaces_by_id(settings.root).get(args.space)
                 if space is None:
                     raise SbiError(f"unknown space {args.space!r}")
                 tc = settings.table
-                res = build_table(conn, args.space, tz=space.tz, step_minutes=tc.step_minutes, start=args.start,
-                                  end=args.end, min_coverage=tc.min_coverage, min_presence=tc.min_presence,
-                                  min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
-                                  exclude_labels=tuple(tc.exclude_labels))
+                res = _build_table(conn, settings, space, args.start, args.end)
                 out = settings.resolve(args.out); out.mkdir(parents=True, exist_ok=True)
                 res.table.to_csv(out / f"{args.space}_table.csv", index_label="timestamp")
                 res.catalog.to_csv(out / f"{args.space}_catalog.csv", index=False)
@@ -141,6 +165,19 @@ def main(argv: list[str] | None = None) -> int:
                     out / f"{args.space}_catalog.csv", index=False)
                 print(f"default model inputs ({len(sel)}): {', '.join(sel)}")
                 print(f"written: {out / (args.space + '_table.csv')} and _catalog.csv")
+            elif args.cmd == "stability":
+                from .eval.stability import stability
+                space = _spaces_by_id(settings.root).get(args.space)
+                if space is None:
+                    raise SbiError(f"unknown space {args.space!r}")
+                rep = stability(_build_table(conn, settings, space).table, start=args.start, end=args.end)
+                out = settings.resolve(args.out); out.mkdir(parents=True, exist_ok=True)
+                rep.to_csv(out / f"{args.space}_stability.csv", index=False)
+                shown = rep[rep["window_mean"] >= args.min_mean].drop(columns=["kind", "source"])
+                print(f"{args.space}: quiet window {args.start or 'start'} .. {args.end or 'end'} ({space.tz}); "
+                      f"noise = mean change between consecutive slots, snr = spread / noise (higher is better)")
+                print(shown.to_string(index=False) if len(shown) else "no columns with data in that window")
+                print(f"written: {out / (args.space + '_stability.csv')}")
         finally:
             conn.close()
         return 0

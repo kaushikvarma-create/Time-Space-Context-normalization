@@ -47,6 +47,7 @@ class FakeSource:
 
 class FakeDetector:
     version = "fake-det@1"
+    min_conf = 0.05
 
     def __init__(self, dets=(), error: Exception | None = None):
         self.dets, self.error, self.calls = list(dets), error, 0
@@ -68,9 +69,14 @@ class FakeReader:
             raise self.error
         return self.reading
 
+    def parse(self, raw, space):
+        """Stored answers replay as the reading this fake was built with (raw text kept)."""
+        from dataclasses import replace
+        return replace(self.reading, raw=raw)
 
-def det(label: str, bbox, conf: float = 0.9) -> Detection:
-    return Detection(label, conf, tuple(bbox))
+
+def det(label: str, bbox, conf: float = 0.9, counted: bool = True) -> Detection:
+    return Detection(label, conf, tuple(bbox), counted)
 
 
 @pytest.fixture

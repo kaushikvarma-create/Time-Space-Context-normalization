@@ -24,7 +24,7 @@ src/sbi/
   pipeline.py            Engine 1: frame -> observations, scene state, events (one atomic transaction)
   baseline.py            per (space, weekday, hour) averages, always with n
   tick.py cli.py         orchestration with per-space failure isolation; `python -m sbi <command>`
-  labeling/ eval/        ground-truth labelling and accuracy report
+  labeling/ eval/        ground-truth labelling, accuracy report, label-free stability report
 tests/                   pytest, fakes only (no camera / GPU / LM Studio needed)
 ```
 
@@ -41,7 +41,10 @@ scripts/label.sh                          # label frames (blind), then look at t
 Other commands: `migrate`, `baseline [--space ID]`, `reprocess --space ID [--frame-id N]` (re-extract stored
 frames after a prompt/model change; results are replaced, not duplicated), `curate` (link synonyms and hierarchy
 among discovered object names; `scripts/curate.sh` for scheduled runs), `links` / `link-set ID approved|rejected`
-(review or undo links), `table --space ID` (Chronos-ready table + column catalog in `data/exports/`).
+(review or undo links), `table --space ID` (Chronos-ready table + column catalog in `data/exports/`),
+`reprocess --space ID --detector-only` (re-run only the detector; each frame's stored VLM answer is replayed
+unchanged, no VLM call), `stability --space ID --start '2026-11-14 00:00' --end '2026-11-14 05:00'` (how much
+each count wobbles inside a quiet window, in IST; a noise check that needs no labels).
 Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
 
 ## Conventions
@@ -58,6 +61,11 @@ Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
 - **Never give the VLM a list of object names** (it reports listed things that are not there; see
   `docs/research/2026-11-13-photo-to-numbers.md`). Prompts are open-vocabulary; naming is cleaned up afterwards by
   the taxonomy (`same` / `is_a` links, raw labels kept forever, history re-mapped on any change).
+- **Detector thresholds:** the detector stores every box down to `detector.store_conf` (0.05) in `detections`,
+  with its confidence. Only boxes at or above the counting threshold (`detector.conf`, or a per-label
+  `detector.class_conf`) become observations, links and totals. The table also counts at each
+  `table.conf_levels` level (`count.yolo_c05.<type>`); those variants are never default model inputs. Pick
+  per-label thresholds from human labels (`sbi eval`), not by eye; `sbi stability` shows which are steadier.
 - **Chronos table:** regular IST grid, NaN for missing slots (never 0, never a dropped row), every dimension kept;
   the catalog says which columns are eligible and why, and a small default set is selected for models.
 

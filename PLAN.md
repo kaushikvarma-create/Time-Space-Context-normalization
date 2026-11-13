@@ -43,6 +43,15 @@ Prompt v2 (fixed `status` list, scene rubrics, `unknown` allowed): tidiness stop
 Labelling: `scripts/label.sh` (blind labelling, then reveals model counts); `PYTHONPATH=src python3 -m sbi eval` reports bias/MAE/within-1 per type and part of day.
 Early parking signal (unlabelled, so a hypothesis only): morning bike count rose 6 -> 13 in YOLO; VLM bike count was much jumpier (25,25,20,15) and ~2x YOLO's level. YOLO may be better for trend, VLM for level.
 
+Low-confidence detections (2026-11-13, migration 004): YOLO runs at a 0.05 storage floor and every box is kept in
+`detections` with its confidence. The counted set (>= 0.25) is unchanged, verified identical on all stored frames.
+The table adds `count.yolo_c05|c10.<type>` and `area.yolo*.<type>` (share of the image covered by boxes).
+Why: on one parking frame YOLO counted 9 two-wheelers at 0.25 and 22 at 0.05 (about 20+ by eye). Unvalidated.
+Decide per-type thresholds (`detector.class_conf`) from human labels, plus `sbi stability` on night windows.
+Open-vocabulary detector tests (docs/research, Part 4): YOLOE undercounts worse than YOLO12x, SAM 2 alone cannot
+count packed bikes, SAM 3 is untested (gated weights). SAM 2 masks on YOLO boxes are a later option for
+duplicate removal and true mask area.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.
