@@ -25,6 +25,12 @@ table.conf_levels there is also count.yolo_cNN.<type> and area.yolo_cNN.<type>, 
 confidence >= 0.NN. They are NaN for frames processed before low-confidence boxes were stored (unknown, not
 zero). Variants are marked in the catalog and never picked as default model inputs: which threshold is right
 per object type is decided from human labels, not here.
+
+Outline (mask) columns, when a segmenter ran: sources `sam2` (counted boxes) and `sam2_cNN` (all boxes >= 0.NN):
+  count.sam2*.<type>  boxes after removing same-type boxes that outline the same object
+  area.sam2*.<type>   share of the image covered by outlines      cellarea.sam2*.<cell>.<type>  share of a cell
+cellarea is built for the counted boxes only. All are NaN for frames no segmenter outlined. Only area.sam2.*
+and cellarea.sam2.* can be default inputs.
 """
 from __future__ import annotations
 
@@ -40,18 +46,25 @@ import pandas as pd
 
 from ..errors import SbiError
 from ..perception.geometry import union_area
+from ..perception.masks import decode_mask
 from ..taxonomy import Taxonomy, load_taxonomy
+from .mask_features import mask_features
 
 META = ["slot_status", "frame_id", "vlm_ok"]
 CAT_COLUMNS = ["lighting", "door_state", "tidiness", "weather_visible"]
-COUNT_KINDS = {"count", "rollup", "cell", "rel", "area"}
-OBJECT_KINDS = {"count", "rollup", "cell", "area"}       # families whose last name part is an object type
-_VARIANT = re.compile(r"^yolo_c\d\d$")
+COUNT_KINDS = {"count", "rollup", "cell", "rel", "area", "cellarea"}
+OBJECT_KINDS = {"count", "rollup", "cell", "area", "cellarea"}   # families whose last name part is an object type
+_LEVEL = re.compile(r"_c\d\d$")
 
 
-def level_source(level: float) -> str:
+def level_source(level: float, base: str = "yolo") -> str:
     """Source token for a detector confidence level: 0.05 -> 'yolo_c05'."""
-    return f"yolo_c{round(level * 100):02d}"
+    return f"{base}_c{round(level * 100):02d}"
+
+
+def is_variant(kind: str, source: str) -> bool:
+    """A near-copy of a primary series (another threshold, or the same count after outline de-duplication)."""
+    return bool(_LEVEL.search(source)) or (source == "sam2" and kind == "count")
 
 
 @dataclass(frozen=True)
@@ -69,7 +82,7 @@ def calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
 
 def _pick_frames(conn: sqlite3.Connection, space_id: str, tz: str, step: int) -> pd.DataFrame:
     f = pd.read_sql_query("SELECT frame_id, ts_utc, capture_status, processed_utc, vlm_raw, brightness, contrast, "
-                          "sharpness, detector_min_conf FROM frames WHERE space_id=?", conn, params=(space_id,))
+                          "sharpness, detector_min_conf, segmenter_version FROM frames WHERE space_id=?", conn, params=(space_id,))
     if f.empty:
         raise SbiError(f"no frames stored for space {space_id!r}")
     local = pd.to_datetime(f["ts_utc"], utc=True).dt.tz_convert(tz).dt.tz_localize(None)
@@ -89,7 +102,9 @@ def _name(tax: Taxonomy, raw: str | None, fallback: str) -> str:
 def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minutes: int = 15,
                 start: str | None = None, end: str | None = None, min_coverage: float = 0.5,
                 min_presence: float = 0.05, min_valid_slots: int = 8, min_present_slots: int = 3,
-                exclude_labels: tuple[str, ...] = (), conf_levels: tuple[float, ...] = ()) -> TableResult:
+                exclude_labels: tuple[str, ...] = (), conf_levels: tuple[float, ...] = (),
+                mask_dup_iou: float = 0.5, grid: tuple[int, int] | None = None,
+                cell_area_min: float = 0.02) -> TableResult:
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
@@ -104,13 +119,16 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
 
     floor = pd.to_numeric(frames["detector_min_conf"], errors="coerce").reindex(index)
     level_ok = {level_source(lv): valid & (floor <= lv + 1e-9) for lv in conf_levels}   # was the frame read that low?
+    outlined = valid & frames["segmenter_version"].notna().reindex(index, fill_value=False)
+    mask_sources: dict[str, float | None] = {"sam2": None, **{level_source(lv, "sam2"): lv for lv in conf_levels}}
+    source_ok = {**level_ok, "sam2": outlined,
+                 **{level_source(lv, "sam2"): outlined & level_ok[level_source(lv)] for lv in conf_levels}}
 
     fid_slot = {int(fid): slot for slot, fid in t.loc[valid, "frame_id"].items()}
-    blocks: dict[str, pd.Series] = {}
+    blocks: dict[str, dict] = defaultdict(lambda: defaultdict(float))       # column -> {slot: value}
 
     def add(col: str, slot, value: float) -> None:
-        blocks.setdefault(col, pd.Series(0.0, index=index))
-        blocks[col].at[slot] += value
+        blocks[col][slot] += value
 
     if fid_slot:
         marks = ",".join("?" * len(fid_slot))
@@ -129,14 +147,21 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 f"SELECT frame_id, object_type, raw_label, bbox_norm FROM observations "
                 f"WHERE source='yolo' AND bbox_norm IS NOT NULL AND frame_id IN ({marks})", ids):
             boxes[("yolo", _name(tax, raw, otype), fid_slot[fid])].append(json.loads(bbox))
-        if conf_levels:
-            for fid, raw, conf, bbox in conn.execute(
-                    f"SELECT frame_id, raw_label, confidence, bbox_norm FROM detections WHERE frame_id IN ({marks})", ids):
-                slot, name = fid_slot[fid], _name(tax, raw, raw)
-                for lv in conf_levels:
-                    if conf >= lv:
-                        add(f"count.{level_source(lv)}.{name}", slot, 1)
-                        boxes[(level_source(lv), name, slot)].append(json.loads(bbox))
+        outlines: dict[int, list] = defaultdict(list)                       # frame -> (type, conf, counted, mask)
+        for fid, raw, conf, counted, bbox, mask in conn.execute(
+                f"SELECT frame_id, raw_label, confidence, counted, bbox_norm, mask FROM detections "
+                f"WHERE frame_id IN ({marks})", ids):
+            slot, name = fid_slot[fid], _name(tax, raw, raw)
+            for lv in conf_levels:
+                if conf >= lv:
+                    add(f"count.{level_source(lv)}.{name}", slot, 1)
+                    boxes[(level_source(lv), name, slot)].append(json.loads(bbox))
+            if mask is not None:
+                outlines[fid].append((name, conf, bool(counted), decode_mask(mask)))
+        for fid, masked in outlines.items():
+            for col, value in mask_features(masked, sources=mask_sources, min_iou=mask_dup_iou, grid=grid,
+                                            cell_min=cell_area_min).items():
+                add(col, fid_slot[fid], value)
         for (src, name, slot), bs in boxes.items():
             add(f"area.{src}.{name}", slot, round(union_area(bs), 5))
         for fid, src, s, p, o, rs, ro, n in conn.execute(
@@ -150,10 +175,11 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
         if col.split(".", 2)[2] not in has_children:
             del blocks[col]
 
-    counts = pd.DataFrame(blocks, index=index)
+    counts = pd.DataFrame({col: pd.Series(by_slot, dtype=float) for col, by_slot in blocks.items()},
+                          index=index).fillna(0.0)
     for col in counts.columns:                       # 0 only where the source actually looked; NaN otherwise
         src = col.split(".")[1]
-        counts.loc[~(vlm_ok if src == "vlm" else level_ok.get(src, valid)), col] = np.nan
+        counts.loc[~(vlm_ok if src == "vlm" else source_ok.get(src, valid)), col] = np.nan
 
     scene = pd.read_sql_query(
         "SELECT frame_id, people_yolo, people_vlm, vehicles_yolo, count_disagree, lighting, door_state, tidiness, "
@@ -179,7 +205,8 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     def family(prefix: str) -> list[str]:
         return sorted(c for c in counts.columns if c.startswith(prefix))
     ordered = pd.concat([num.reindex(index), img, counts[family("count.")], counts[family("area.")],
-                         counts[family("rollup.")], counts[family("cell.")], counts[family("rel.")], cats, feat_w], axis=1)
+                         counts[family("rollup.")], counts[family("cell.")],
+                         counts[family("cellarea.")], counts[family("rel.")], cats, feat_w], axis=1)
     table = pd.concat([t, ordered], axis=1)
     return TableResult(table, _catalog(table, min_coverage, min_presence, min_valid_slots, min_present_slots,
                                        frozenset(exclude_labels)))
@@ -220,7 +247,7 @@ def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_
         else:
             ready, why = True, "ok"
         rows.append({"column": col, "kind": kind, "source": source, "known_future": kind == "cal",
-                     "variant": bool(_VARIANT.match(source)),
+                     "variant": is_variant(kind, source),
                      "coverage": round(coverage, 3), "valid_slots": len(nn), "present_slots": present,
                      "presence": None if np.isnan(presence) else round(presence, 3),
                      "mean": round(float(nn.mean()), 3) if numeric and len(nn) else None,
@@ -234,8 +261,8 @@ def select_covariates(catalog: pd.DataFrame, *, targets: list[str], max_covariat
                       min_autocorr: float, autocorr_min_slots: int) -> list[str]:
     """Default model inputs: `always` columns (if eligible), then eligible columns ranked by smoothness
     (lag-1 autocorrelation; real occupancy changes smoothly, model noise flickers) and coverage.
-    Threshold variants (count.yolo_cNN.*) are near-copies of the counted series, so they are only used when
-    named in `always`; otherwise they would crowd real inputs out of the cap.
+    Variants (other thresholds such as count.yolo_cNN.*, and de-duplicated counts) are near-copies of a primary
+    series, so they are only used when named in `always`; otherwise they would crowd real inputs out of the cap.
     Smoothness only filters once there are enough slots to estimate it (about +-0.23 noise at 19 slots).
     Every other column stays in the table; this only picks what a model gets by default."""
     ready = catalog[catalog["model_ready"] & (catalog["kind"] != "cal") & ~catalog["column"].isin(targets)].copy()

@@ -21,6 +21,10 @@ class DetectorError(SbiError):
     """The object detector failed to load or run."""
 
 
+class SegmenterError(SbiError):
+    """The segmenter (mask model) could not load or run. Frames are still processed, without masks."""
+
+
 class VLMError(SbiError):
     """The scene-reading model failed after retries or returned an unusable answer."""
 

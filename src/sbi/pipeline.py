@@ -6,6 +6,8 @@ Design:
   * Re-running a frame replaces its previous results (re-extract old images with a new prompt/model).
   * Every detector box is stored as a raw detection; only boxes marked `counted` become observations, links
     and people/vehicle totals. Thresholds can therefore change later without re-running the model.
+  * An optional segmenter outlines every stored box. SegmenterError is handled like VLMError: the frame is
+    kept and its masks are NULL (unknown, not zero).
   * replay_vlm=True re-runs the detector only: the VLM part is rebuilt from the stored raw answer, unchanged.
   * VLMError is handled (frame kept with detector results, VLM fields NULL: missing is not zero).
     DetectorError and everything else propagate: the frame stays unprocessed and is retried from the backlog.
@@ -20,11 +22,12 @@ from pathlib import Path
 
 import cv2
 
-from .errors import StorageError, VLMError
+from .errors import SegmenterError, StorageError, VLMError
 from .grid import bbox_to_cell
 from .perception.geometry import overlap_links
 from .perception.normalise import canonical
-from .perception.types import Detection, Detector, SceneReader, SceneReading
+from .perception.masks import encode_mask
+from .perception.types import Detection, Detector, SceneReader, SceneReading, SegMask, Segmenter
 from .spaces import SpaceConfig
 from .store import results
 from .store.db import transaction
@@ -47,6 +50,7 @@ class FrameResult:
     boxes: int = 0                     # counted boxes
     boxes_stored: int = 0              # all raw detections, counted or not
     vlm_ok: bool = False
+    masks_ok: bool = False             # a segmenter ran for this frame
 
 
 def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tuple[SceneReading | None, str | None]:
@@ -66,7 +70,7 @@ def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tu
 
 
 def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, reader: SceneReader | None, *,
-                  root: Path, replay_vlm: bool = False) -> FrameResult:
+                  root: Path, replay_vlm: bool = False, segmenter: Segmenter | None = None) -> FrameResult:
     frame = get_frame(conn, frame_id)
     if frame is None:
         raise StorageError(f"frame {frame_id} does not exist")
@@ -78,6 +82,18 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
         return FrameResult(frame_id, False, reason="image unreadable")
 
     detections = detector.detect(img, space)          # DetectorError propagates; nothing written yet
+
+    masks: list[SegMask] | None = None
+    if segmenter is not None:
+        try:
+            masks = segmenter.segment(img, [d.bbox for d in detections])
+            if len(masks) != len(detections):
+                raise SegmenterError(f"{len(masks)} masks for {len(detections)} boxes")
+        except SegmenterError as e:
+            masks = None
+            log.warning("%s frame %d: segmenter unavailable, storing boxes without outlines: %s",
+                        space.space_id, frame_id, e)
+    seg_version = segmenter.version if segmenter is not None and masks is not None else None
 
     reading: SceneReading | None = None
     vlm_error: str | None = None
@@ -92,20 +108,23 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
                         space.space_id, frame_id, vlm_error)
 
     with transaction(conn):
-        return _write(conn, space, frame, detections, reading, vlm_error, detector)
+        return _write(conn, space, frame, detections, reading, vlm_error, detector, masks, seg_version)
 
 
 def _write(conn, space: SpaceConfig, frame, all_detections: list[Detection], reading: SceneReading | None,
-           vlm_error: str | None, detector: Detector) -> FrameResult:
+           vlm_error: str | None, detector: Detector, masks: list[SegMask] | None = None,
+           seg_version: str | None = None) -> FrameResult:
     fid, sid, ts = frame["frame_id"], frame["space_id"], frame["ts_utc"]
     results.clear_frame_results(conn, fid)
 
     # raw layer: every box the detector returned, with its confidence (position is geometric; the VLM never
     # sees the grid). Counted boxes also become observations below.
-    for d in all_detections:
+    for i, d in enumerate(all_detections):
         cell = bbox_to_cell(d.bbox, space.grid.cols, space.grid.rows, space.grid.anchor)
+        m = masks[i] if masks is not None else None
         results.insert_detection(conn, frame_id=fid, space_id=sid, ts_utc=ts, raw_label=d.label, confidence=d.conf,
-                                 bbox=d.bbox, cell_id=cell[2], counted=d.counted)
+                                 bbox=d.bbox, cell_id=cell[2], counted=d.counted,
+                                 mask=encode_mask(m.grid) if m else None, mask_area=m.area if m else None)
     detections = [d for d in all_detections if d.counted]
     for d in detections:
         label, _ = canonical(conn, d.label, space_id=sid, frame_id=fid, ts_utc=ts)
@@ -165,7 +184,7 @@ def _write(conn, space: SpaceConfig, frame, all_detections: list[Detection], rea
         detector_raw=json.dumps([{"label": d.label, "conf": d.conf, "bbox": list(d.bbox), "counted": d.counted}
                                  for d in all_detections]),
         vlm_raw=reading.raw if reading else (json.dumps({"error": vlm_error}) if vlm_error else None),
-        processed_utc=now_utc().isoformat(timespec="seconds"))
+        processed_utc=now_utc().isoformat(timespec="seconds"), segmenter_version=seg_version)
     return FrameResult(fid, True, people_yolo=people_yolo, people_vlm=people_vlm, boxes=len(detections),
                        boxes_stored=len(all_detections),
-                       vlm_ok=reading is not None)
+                       vlm_ok=reading is not None, masks_ok=seg_version is not None)

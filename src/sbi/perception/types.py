@@ -22,6 +22,12 @@ class Detection:
     counted: bool = True  # False = below the counting threshold: stored as a raw detection, never counted
 
 
+@dataclass(frozen=True, eq=False)
+class SegMask:
+    area: float           # share of the full-resolution image covered by the outline
+    grid: np.ndarray      # low-resolution boolean copy of the outline (what gets stored)
+
+
 @dataclass(frozen=True)
 class SceneObject:
     label: str            # raw label as read by the model (normalised later against the registry)
@@ -58,6 +64,13 @@ class Detector(Protocol):
     def detect(self, image: np.ndarray, space: SpaceConfig) -> list[Detection]:
         """Every box down to min_conf; `counted` marks the ones above the counting threshold.
         Raise DetectorError on failure."""
+
+
+class Segmenter(Protocol):
+    version: str
+
+    def segment(self, image: np.ndarray, boxes: list[BBox]) -> list[SegMask]:
+        """One outline per box, in the same order. Raise SegmenterError on failure."""
 
 
 class SceneReader(Protocol):

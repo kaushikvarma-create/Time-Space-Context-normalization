@@ -235,3 +235,8 @@ they work. A few weeks of data, including evenings and weekends, is needed.
   - New table columns: `count.yolo_c05|c10.<type>` and `area.yolo*.<type>` (union of boxes as a share of the image, a stand-in for mask area until SAM 2 is added).
   - `sbi stability` reports how much each count wobbles in a quiet window. It needs night data to mean anything.
   - First day, daytime only (not a quiet window): parking motorcycles average 9.1 at ≥0.25, 13.1 at ≥0.10, 18.4 at ≥0.05, and 15.6 from the VLM.
+- **SAM 2 outlines implemented (migration 005):**
+  - SAM 2.1-L outlines every stored YOLO box. On the 64 stored frames: 2,647 outlines, none empty, median 100% of each outline inside its own box, about 0.2 s per frame, about 130 bytes per stored outline.
+  - Duplicate rule: same-type boxes whose outlines have IoU ≥ 0.5 are one object. Parking frame 24 motorcycles: 22 boxes at ≥0.05 → 19; 15 at ≥0.10 → 15; 9 at ≥0.25 → 9. At IoU ≥ 0.3 the 22 become 15, which looks too aggressive against roughly 20+ by eye. One frame, by eye: the rule needs labels.
+  - A small outline nested inside a larger one is deliberately not a duplicate (IoU is low), so a single bike inside a cluster box is kept.
+  - Mask area is smaller than box area (motorcycles: 7.1% of the image by outline vs 11.5% by box on average), because boxes include background.

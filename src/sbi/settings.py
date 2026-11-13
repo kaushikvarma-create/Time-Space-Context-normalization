@@ -53,6 +53,13 @@ class DetectorSettings(_Strict):
         return self.class_conf.get(label, self.conf)
 
 
+class SegmenterSettings(_Strict):
+    kind: Literal["none", "sam2"] = "none"           # none = no outlines; every mask-derived column stays empty
+    weights: str = "models/sam2.1_l.pt"
+    mask_width: int = Field(384, ge=32, le=2048)     # width of the stored low-resolution outline
+    batch: int = Field(64, ge=1)                     # boxes per model call
+
+
 class SceneReaderSettings(_Strict):
     kind: Literal["lmstudio_openai"] = "lmstudio_openai"
     base_url: str
@@ -88,6 +95,8 @@ class TableSettings(_Strict):
     min_autocorr: float = Field(0.3, ge=-1, le=1)
     autocorr_min_slots: int = Field(96, ge=3)        # smoothness filter only once there is ~1 day of slots
     conf_levels: list[float] = [0.05, 0.10]          # extra detector thresholds to count at (count.yolo_cNN.*)
+    mask_dup_iou: float = Field(0.5, gt=0, le=1)     # same-type outlines overlapping this much = one object
+    cell_area_min: float = Field(0.02, ge=0, lt=1)   # smaller cell coverage is edge spill, recorded as 0
 
     @field_validator("conf_levels")
     @classmethod
@@ -118,6 +127,7 @@ class Settings(_Strict):
     paths: Paths = Paths()
     frame_source: FrameSourceSettings = FrameSourceSettings()
     detector: DetectorSettings = DetectorSettings()
+    segmenter: SegmenterSettings = SegmenterSettings()
     scene_reader: SceneReaderSettings
     baseline: BaselineSettings = BaselineSettings()
     processing: ProcessingSettings = ProcessingSettings()

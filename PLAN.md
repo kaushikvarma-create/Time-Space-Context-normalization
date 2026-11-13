@@ -52,6 +52,12 @@ Open-vocabulary detector tests (docs/research, Part 4): YOLOE undercounts worse 
 count packed bikes, SAM 3 is untested (gated weights). SAM 2 masks on YOLO boxes are a later option for
 duplicate removal and true mask area.
 
+SAM 2 outlines (2026-11-13, migration 005): SAM 2.1-L outlines every stored YOLO box (about 0.2 s per photo).
+Outlines are stored; the table derives `area.sam2*.<type>`, `cellarea.sam2.<cell>.<type>` and `count.sam2*.<type>`
+(same-type boxes whose outlines overlap with IoU >= 0.5 count once). On parking frame 24: 22 boxes at >= 0.05
+become 19 after outline de-duplication (about 20+ by eye). Unvalidated until labels exist. Known limit: SAM 2
+cannot add objects YOLO missed, and one box around a cluster of bikes still counts as one.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.

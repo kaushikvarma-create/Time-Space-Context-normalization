@@ -75,6 +75,28 @@ class FakeReader:
         return replace(self.reading, raw=raw)
 
 
+class FakeSegmenter:
+    """Outlines each box as its own filled rectangle on a 64x36 grid (or returns the masks it was given)."""
+    version = "fake-seg@64"
+
+    def __init__(self, masks=None, error: Exception | None = None):
+        self.masks, self.error, self.calls = masks, error, 0
+
+    def segment(self, image, boxes):
+        from sbi.perception.types import SegMask
+        self.calls += 1
+        if self.error:
+            raise self.error
+        if self.masks is not None:
+            return list(self.masks)
+        out = []
+        for x1, y1, x2, y2 in boxes:
+            g = np.zeros((36, 64), dtype=bool)
+            g[round(y1 * 36):round(y2 * 36), round(x1 * 64):round(x2 * 64)] = True
+            out.append(SegMask(round((x2 - x1) * (y2 - y1), 6), g))
+        return out
+
+
 def det(label: str, bbox, conf: float = 0.9, counted: bool = True) -> Detection:
     return Detection(label, conf, tuple(bbox), counted)
 

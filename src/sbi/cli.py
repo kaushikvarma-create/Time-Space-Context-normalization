@@ -4,7 +4,7 @@
   migrate     apply pending database migrations
   baseline    rebuild baselines (all buckets) for one or all spaces
   reprocess   re-run Engine 1 on stored frames (e.g. after a prompt or model change);
-              --detector-only re-runs the detector and keeps each frame's stored VLM answer as it is
+              --detector-only re-runs the detector (and segmenter) and keeps each frame's stored VLM answer
   eval        accuracy report against human labels
   curate      find synonym ('same') and hierarchy ('is_a') links between object names, apply them, re-map history
   links       list taxonomy links            link-set ID approved|rejected   human decision (reversible)
@@ -24,7 +24,7 @@ from . import baseline
 from .errors import SbiError
 from .eval.vlm_eval import report
 from .logging_setup import configure_logging
-from .perception.factory import build_detector, build_scene_reader
+from .perception.factory import build_detector, build_scene_reader, build_segmenter
 from .pipeline import process_frame
 from .settings import load_settings
 from .spaces import discover_space_files, load_space
@@ -72,7 +72,9 @@ def _build_table(conn, settings, space, start=None, end=None):
     return build_table(conn, space.space_id, tz=space.tz, step_minutes=tc.step_minutes, start=start, end=end,
                        min_coverage=tc.min_coverage, min_presence=tc.min_presence,
                        min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
-                       exclude_labels=tuple(tc.exclude_labels), conf_levels=tuple(tc.conf_levels))
+                       exclude_labels=tuple(tc.exclude_labels), conf_levels=tuple(tc.conf_levels),
+                       mask_dup_iou=tc.mask_dup_iou, grid=(space.grid.cols, space.grid.rows),
+                       cell_area_min=tc.cell_area_min)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -103,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
                 if space is None:
                     raise SbiError(f"unknown space {args.space!r}")
                 detector = build_detector(settings.detector, settings.root)
+                segmenter = build_segmenter(settings.segmenter, settings.root)    # SegmenterError: stop, do not
+                                                                                  # silently wipe stored outlines
                 if args.detector_only and args.no_vlm:
                     raise SbiError("--detector-only keeps the stored VLM answers; it cannot be combined with --no-vlm")
                 reader = None if args.no_vlm else build_scene_reader(settings.scene_reader)
@@ -113,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
                 for i in ids:
                     try:
                         done += process_frame(conn, space, i, detector, reader, root=settings.root,
-                                              replay_vlm=args.detector_only).processed
+                                              replay_vlm=args.detector_only, segmenter=segmenter).processed
                     except SbiError as e:      # that frame is left exactly as it was; keep going
                         failed += 1
                         log.error("frame %d not reprocessed: %s", i, e)

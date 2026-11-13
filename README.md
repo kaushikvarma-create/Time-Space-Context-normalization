@@ -19,7 +19,8 @@ src/sbi/
   timeutil.py            IST time dimensions; ts_utc is canonical, everything else is local time
   grid.py                box -> grid cell (the VLM never sees the grid)
   ingest/                camera sources (NVR RTSP) and capture (image + frame row)
-  perception/            Detector / SceneReader / FrameSource interfaces, YOLO, LM Studio reader, normaliser
+  perception/            Detector / Segmenter / SceneReader / FrameSource interfaces, YOLO, SAM 2, LM Studio
+                         reader, normaliser, mask codec
   store/                 connection, transactions, numbered migrations, data-access modules
   pipeline.py            Engine 1: frame -> observations, scene state, events (one atomic transaction)
   baseline.py            per (space, weekday, hour) averages, always with n
@@ -66,13 +67,18 @@ Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
   `detector.class_conf`) become observations, links and totals. The table also counts at each
   `table.conf_levels` level (`count.yolo_c05.<type>`); those variants are never default model inputs. Pick
   per-label thresholds from human labels (`sbi eval`), not by eye; `sbi stability` shows which are steadier.
+- **Outlines:** an optional segmenter (`segmenter.kind: sam2`; `none` switches it off) outlines every stored
+  box. SAM 2 only traces what is inside a box YOLO found; it does not find or name anything. The outline itself
+  is stored (`detections.mask`, about 130 bytes each), so areas, per-cell coverage and duplicate removal are
+  derived in the table (`area.sam2*`, `cellarea.sam2`, `count.sam2*`) and can be re-derived with other rules
+  without re-running a model. A segmenter failure never loses a frame: its outline columns are NaN.
 - **Chronos table:** regular IST grid, NaN for missing slots (never 0, never a dropped row), every dimension kept;
   the catalog says which columns are eligible and why, and a small default set is selected for models.
 
 ## Extending
 
 - **New space:** add `config/spaces/<id>.yaml` (copy an existing one). No code changes; the next tick picks it up.
-- **New detector / scene reader / camera source:** implement the Protocol in `perception/types.py`, register its
+- **New detector / segmenter / scene reader / camera source:** implement the Protocol in `perception/types.py`, register its
   `kind` in `perception/factory.py` and in the settings model, select it in `config/pipeline.yaml`.
 - **New object type:** nothing to do. Unknown labels become `object_registry` rows flagged `auto_new`, and
   `sbi curate` links them to existing names (synonym merge or is_a roll-up).

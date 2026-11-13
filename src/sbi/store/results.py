@@ -32,11 +32,14 @@ def insert_observation(conn: sqlite3.Connection, *, frame_id: int, space_id: str
 
 
 def insert_detection(conn: sqlite3.Connection, *, frame_id: int, space_id: str, ts_utc: str, raw_label: str,
-                     confidence: float, bbox: BBox, cell_id: str | None, counted: bool) -> None:
-    """One raw detector box (counted or not). Counted boxes are also stored as observations."""
-    conn.execute("INSERT INTO detections(frame_id,space_id,ts_utc,raw_label,confidence,bbox_norm,cell_id,counted) "
-                 "VALUES(?,?,?,?,?,?,?,?)",
-                 (frame_id, space_id, ts_utc, raw_label, confidence, json.dumps(list(bbox)), cell_id, int(counted)))
+                     confidence: float, bbox: BBox, cell_id: str | None, counted: bool,
+                     mask: bytes | None = None, mask_area: float | None = None) -> None:
+    """One raw detector box (counted or not), with its outline if a segmenter ran. Counted boxes are also
+    stored as observations."""
+    conn.execute("INSERT INTO detections(frame_id,space_id,ts_utc,raw_label,confidence,bbox_norm,cell_id,counted,"
+                 "mask,mask_area) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                 (frame_id, space_id, ts_utc, raw_label, confidence, json.dumps(list(bbox)), cell_id, int(counted),
+                  mask, mask_area))
 
 
 def insert_relation(conn: sqlite3.Connection, *, frame_id: int, space_id: str, ts_utc: str, subject: str,
@@ -77,8 +80,8 @@ def insert_event(conn: sqlite3.Connection, *, space_id: str, ts_utc: str, frame_
 
 def mark_processed(conn: sqlite3.Connection, frame_id: int, *, detector_version: str, detector_min_conf: float | None,
                    vlm_model: str | None, prompt_version: str | None, detector_raw: str, vlm_raw: str | None,
-                   processed_utc: str) -> None:
-    conn.execute("""UPDATE frames SET detector_version=?, detector_min_conf=?, vlm_model=?, prompt_version=?,
-                      detector_raw=?, vlm_raw=?, processed_utc=? WHERE frame_id=?""",
-                 (detector_version, detector_min_conf, vlm_model, prompt_version, detector_raw, vlm_raw,
-                  processed_utc, frame_id))
+                   processed_utc: str, segmenter_version: str | None = None) -> None:
+    conn.execute("""UPDATE frames SET detector_version=?, detector_min_conf=?, segmenter_version=?, vlm_model=?,
+                      prompt_version=?, detector_raw=?, vlm_raw=?, processed_utc=? WHERE frame_id=?""",
+                 (detector_version, detector_min_conf, segmenter_version, vlm_model, prompt_version, detector_raw,
+                  vlm_raw, processed_utc, frame_id))

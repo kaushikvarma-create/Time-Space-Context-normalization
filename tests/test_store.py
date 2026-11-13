@@ -11,8 +11,8 @@ from sbi.store.db import MIGRATIONS_DIR, connect, migrate, transaction
 
 def test_migrate_fresh_is_idempotent(tmp_path):
     c = connect(tmp_path / "x.db")
-    assert migrate(c) == 4 and migrate(c) == 4
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert migrate(c) == 5 and migrate(c) == 5
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 5
     names = {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
     assert {"frames", "observations", "labels", "v_frame_counts", "v_observations_wide", "object_links",
             "label_judgments", "relations", "frame_features", "detections"} <= names
@@ -25,7 +25,7 @@ def test_migrate_upgrades_a_pre_versioning_database(tmp_path):
     c = connect(tmp_path / "old.db")
     c.executescript((MIGRATIONS_DIR / "001_core.sql").read_text())
     assert c.execute("PRAGMA user_version").fetchone()[0] == 0
-    assert migrate(c) == 4
+    assert migrate(c) == 5
 
 
 def test_migration_gap_is_rejected(tmp_path):

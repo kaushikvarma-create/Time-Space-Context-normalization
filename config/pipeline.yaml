@@ -26,6 +26,12 @@ detector:                       # kind: yolo
   dedupe_containment: 0.8
   dedupe_same_label_iou: 0.6    # same label, overlapping boxes (e.g. handbag+backpack -> bag)
 
+segmenter:                      # outlines every stored detector box; kind: none switches it off
+  kind: sam2
+  weights: models/sam2.1_l.pt
+  mask_width: 384               # stored outline resolution (384 x 216 for a 16:9 camera)
+  batch: 64
+
 scene_reader:                   # kind: lmstudio_openai (any OpenAI-compatible vision endpoint)
   kind: lmstudio_openai
   base_url: http://10.20.0.1:1234
@@ -60,4 +66,6 @@ table:                          # the Chronos-ready table (sbi table)
   always_include: [scene.people_vlm, scene.people_yolo, scene.vehicles_yolo, count.vlm.motorcycle, count.yolo.car]
   min_autocorr: 0.3             # default inputs must change smoothly (real) rather than flicker (noise)
   autocorr_min_slots: 96        # ...but only once there is about a day of slots to estimate that reliably
+  mask_dup_iou: 0.5             # same-type outlines overlapping this much are one object boxed twice
+  cell_area_min: 0.02           # outline covering less than 2% of a grid cell is edge spill, recorded as 0
   conf_levels: [0.05, 0.10]     # extra detector thresholds to count at: count.yolo_c05.<type>, count.yolo_c10.<type>
