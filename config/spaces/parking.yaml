@@ -1,0 +1,59 @@
+# Space config: parking area (bikes and cars).
+# Do NOT extract licence plates; counts and positions only.
+space_id: parking
+name: Parking area
+space_type: parking
+camera:
+  channel: 3
+  subtype: 0            # 0 = main stream, 1 = sub stream
+  # Host/user/password come from env (SBI_NVR_HOST, SBI_NVR_PORT, SBI_NVR_USER, SBI_NVR_PASS). Never put them here.
+tz: Asia/Kolkata
+cadence_minutes: 15
+
+# Object types a human counts when labelling ground truth (kept short so labelling stays fast).
+label_types: [person, car, motorcycle]
+
+# Burned-in camera timestamp: blacked out before the VLM sees the image. Normalised [x1,y1,x2,y2].
+mask_regions:
+  - [0.64, 0.03, 0.97, 0.09]
+
+grid:
+  cols: 12
+  rows: 8
+  anchor: bottom_center
+
+vocabulary:
+  car:        {category: vehicle, mobility: semi_static}
+  bicycle:    {category: vehicle, mobility: semi_static}   # not 'bike': in Indian English 'bike' usually means motorbike
+  motorcycle: {category: vehicle, mobility: semi_static}
+  truck:      {category: vehicle, mobility: semi_static}
+  bus:        {category: vehicle, mobility: dynamic}
+  person:     {category: person,  mobility: dynamic}
+  helmet:     {category: item,    mobility: dynamic}
+  barrier:    {category: fixture, mobility: fixed}
+  pole:       {category: fixture, mobility: fixed}
+  gate:       {category: fixture, mobility: fixed}
+
+aliases:
+  cycle: bicycle
+  pushbike: bicycle
+  scooter: motorcycle
+  motorbike: motorcycle
+  automobile: car
+  vehicle: car
+  suv: car
+  van: truck
+  pedestrian: person
+
+detector_map:
+  car: car
+  bicycle: bicycle
+  motorcycle: motorcycle
+  truck: truck
+  bus: bus
+  person: person
+
+scene_fields:
+  lighting: [daylight, artificial, dim, dark]
+  weather_visible: [clear, cloudy, rain, fog, unknown]
+  occupancy_level: [empty, sparse, moderate, full]

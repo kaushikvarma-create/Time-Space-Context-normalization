@@ -1,0 +1,60 @@
+# Global pipeline settings. Per-space settings live in config/spaces/*.yaml.
+# Secrets (NVR user/password) are never here: they come from .env / the environment.
+# Env overrides: SBI_LMSTUDIO_URL, SBI_VLM_MODEL, SBI_NVR_HOST, SBI_NVR_PORT, SBI_NVR_USER, SBI_NVR_PASS
+timezone: Asia/Kolkata          # IST. Used for logs and as the default for spaces
+
+paths:                          # relative to the project root
+  db: data/sbi.db
+  images: data/images
+  logs: data/logs
+
+frame_source:                   # kind: nvr_rtsp
+  kind: nvr_rtsp
+  rtsp_transport: tcp
+  warmup_frames: 5              # buffered frames discarded so we keep the freshest one
+  timeout_s: 10
+
+detector:                       # kind: yolo
+  kind: yolo
+  weights: models/yolo12x.pt
+  imgsz: 1920
+  conf: 0.25
+  iou: 0.5
+  dedupe_labels: [person]       # labels where a box mostly inside a stronger box is dropped
+  dedupe_containment: 0.8
+  dedupe_same_label_iou: 0.6    # same label, overlapping boxes (e.g. handbag+backpack -> bag)
+
+scene_reader:                   # kind: lmstudio_openai (any OpenAI-compatible vision endpoint)
+  kind: lmstudio_openai
+  base_url: http://10.20.0.1:1234
+  model: qwen/qwen3.5-9b
+  timeout_s: 120
+  retries: 3
+  max_tokens: 3000               # v3 answers (open vocabulary + relations) reach ~3k chars; 1200 truncated JSON
+  temperature: 0.1
+  reasoning_effort: none        # REQUIRED for Qwen3.5 on LM Studio: otherwise structured output comes back empty
+  image_width: 1344
+
+baseline:
+  ewm_alpha: 0.3                # weight of the newest sample in the exponentially weighted mean
+
+processing:
+  backlog_limit: 5              # unprocessed frames retried per space per tick (e.g. after a detector outage)
+
+curation:                       # vocabulary cleanup: synonyms ('same') and hierarchy ('is_a') links. See sbi/curation.
+  embed_model: text-embedding-nomic-embed-text-v1.5   # shortlists candidate pairs (LM Studio, same base_url)
+  judge_model: qwen/qwen3.5-9b  # answers "is every A a B?" in both directions
+  min_similarity: 0.80          # embedding cosine to consider a pair at all
+  auto_approve: true            # links are audited and reversible (sbi link-set ID rejected)
+
+table:                          # the Chronos-ready table (sbi table)
+  step_minutes: 15
+  min_coverage: 0.5             # a column needs values in >= 50% of slots to be marked model-ready
+  min_presence: 0.05            # a count must be > 0 in >= 5% of valid slots (drops one-off flickers)
+  min_valid_slots: 8
+  min_present_slots: 3          # seen in fewer slots = flicker, not a dimension (still kept in the table)
+  exclude_labels: [wall, floor, ceiling, pillar, roof]   # building parts: their "counts" are VLM noise
+  max_covariates: 24            # default number of past covariates handed to a model
+  always_include: [scene.people_vlm, scene.people_yolo, scene.vehicles_yolo, count.vlm.motorcycle, count.yolo.car]
+  min_autocorr: 0.3             # default inputs must change smoothly (real) rather than flicker (noise)
+  autocorr_min_slots: 96        # ...but only once there is about a day of slots to estimate that reliably

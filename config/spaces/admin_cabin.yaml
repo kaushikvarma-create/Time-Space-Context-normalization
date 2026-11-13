@@ -1,0 +1,100 @@
+# Space config: admin cabin (small room, a few people).
+space_id: admin_cabin
+name: Admin cabin
+space_type: room
+camera:
+  channel: 5
+  subtype: 0            # 0 = main stream, 1 = sub stream
+  # Host/user/password come from env (SBI_NVR_HOST, SBI_NVR_PORT, SBI_NVR_USER, SBI_NVR_PASS). Never put them here.
+tz: Asia/Kolkata
+cadence_minutes: 15
+
+# Object types a human counts when labelling ground truth (kept short so labelling stays fast).
+label_types: [person, chair, monitor, laptop, bag]
+
+# Burned-in camera timestamp: blacked out before the VLM sees the image. Normalised [x1,y1,x2,y2].
+mask_regions:
+  - [0.64, 0.03, 0.97, 0.09]
+
+# Position is geometric: the grid cell is computed from the detector's box.
+# The VLM never sees the grid.
+grid:
+  cols: 8
+  rows: 6
+  anchor: bottom_center   # floor objects: use the box's bottom-centre (feet / wheels) for the cell
+
+# Canonical vocabulary shown to the VLM as "prefer these labels".
+# Anything not matching a label or alias becomes a new registry row flagged auto_new.
+vocabulary:
+  person:   {category: person,    mobility: dynamic}
+  chair:    {category: furniture, mobility: semi_static}
+  sofa:     {category: furniture, mobility: fixed}
+  table:    {category: furniture, mobility: fixed}
+  desk:     {category: furniture, mobility: fixed}
+  laptop:   {category: device,    mobility: semi_static}
+  monitor:  {category: device,    mobility: fixed}
+  phone:    {category: device,    mobility: dynamic}
+  bag:      {category: item,      mobility: dynamic}
+  bottle:   {category: item,      mobility: dynamic}
+  cup:      {category: item,      mobility: dynamic}
+  book:     {category: item,      mobility: semi_static}
+  plant:    {category: furniture, mobility: fixed}
+  door:     {category: fixture,   mobility: fixed}
+  whiteboard: {category: fixture, mobility: fixed}
+  screen:   {category: device,    mobility: fixed}
+  keyboard: {category: device,    mobility: semi_static}
+  mouse:    {category: device,    mobility: semi_static}
+  helmet:   {category: item,      mobility: dynamic}
+  desktop_pc: {category: device,  mobility: fixed}
+
+aliases:
+  couch: sofa
+  settee: sofa
+  tv: screen
+  television: screen
+  display: monitor
+  computer: monitor
+  notebook: laptop
+  cell phone: phone
+  mobile: phone
+  mobile phone: phone
+  backpack: bag
+  handbag: bag
+  potted plant: plant
+  mug: cup
+  worker: person
+  man: person
+  woman: person
+  people: person
+  water bottle: bottle
+  computer tower: desktop_pc
+  pc: desktop_pc
+  cpu: desktop_pc
+  tower: desktop_pc
+  office chair: chair
+  computer monitor: monitor
+  motorcycle helmet: helmet
+
+# Detector class -> canonical label (COCO names -> our vocabulary)
+detector_map:
+  person: person
+  chair: chair
+  couch: sofa
+  "potted plant": plant
+  "dining table": table
+  laptop: laptop
+  tv: monitor
+  keyboard: keyboard
+  mouse: mouse
+  "cell phone": phone
+  backpack: bag
+  handbag: bag
+  bottle: bottle
+  cup: cup
+  book: book
+
+# Scene-level fields the VLM fills in
+scene_fields:
+  lighting: [daylight, artificial, dim, dark]
+  door_state: [open, closed, unknown]
+  tidiness: [tidy, ok, messy, unknown]

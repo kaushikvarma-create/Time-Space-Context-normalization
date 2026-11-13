@@ -1,0 +1,29 @@
+[project]
+name = "sbi"
+version = "0.1.0"
+description = "Space Behaviour Intelligence: camera stills -> structured scene data -> baselines"
+requires-python = ">=3.10"
+dependencies = [
+  "opencv-python",
+  "numpy",
+  "pandas",
+  "pydantic>=2",
+  "pyyaml",
+  "requests",
+]
+
+[project.optional-dependencies]
+detector = ["ultralytics"]
+ui = ["streamlit"]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sbi = ["store/migrations/*.sql"]
