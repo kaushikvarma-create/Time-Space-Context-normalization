@@ -72,7 +72,11 @@ if ss.revealed == fid:
         ss.fid, ss.revealed = core.next_unlabeled(conn, space_id), None
         st.rerun()
 else:
-    left.image(core.to_rgb_small(img))
+    tabs = left.tabs(["Whole photo"] + [name for name, _ in core.quadrants(img)])
+    tabs[0].image(core.to_rgb_small(img))
+    for tab, (_, part) in zip(tabs[1:], core.quadrants(img)):
+        tab.image(core.to_rgb_small(part, width=part.shape[1]))
+    left.caption("Dense area? Count it in the quarter tabs (full resolution, no overlap), then add the quarters up.")
     with right.form("label_form"):
         st.markdown("**Count what you can see**")
         counts = {t: st.number_input(t, min_value=0, max_value=200, value=0, step=1, key=f"{fid}_{t}") for t in types}

@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
                 if rep.failed:
                     return 1
             elif args.cmd == "eval":
-                print(report(conn))
+                print(report(conn, mask_dup_iou=settings.table.mask_dup_iou))
             elif args.cmd == "curate":
                 from .curation.curator import curate
                 from .curation.services import LmStudioEmbedder, LmStudioJudge

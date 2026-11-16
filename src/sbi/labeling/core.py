@@ -22,13 +22,42 @@ def progress(conn: sqlite3.Connection, space_id: str) -> tuple[int, int]:
     return done, total
 
 
+STRATA = [(we, part) for we in (0, 1) for part in ("morning", "afternoon", "evening", "night")]
+
+
+def stratum(dow: int, part_of_day: str) -> tuple[int, str]:
+    return int(dow >= 5), part_of_day
+
+
 def next_unlabeled(conn: sqlite3.Connection, space_id: str) -> int | None:
-    """Stable pseudo-random order so the sample spreads over hours and days, not just the newest frames."""
-    row = conn.execute(
-        """SELECT frame_id FROM frames f WHERE space_id=? AND capture_status='ok' AND processed_utc IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM label_frames l WHERE l.frame_id=f.frame_id)
-           ORDER BY (frame_id * 7919) % 10007 LIMIT 1""", (space_id,)).fetchone()
-    return row[0] if row else None
+    """The next frame to label, spread evenly over (weekday/weekend x part of day): it comes from the stratum with
+    the fewest labels so far (ties in a fixed order), and within a stratum from a stable pseudo-random order. So the
+    first 50 labels cover busy and quiet times alike instead of mostly empty nights, and never only the newest."""
+    labelled = {s: 0 for s in STRATA}
+    for dow, part in conn.execute(
+            "SELECT f.dow, f.part_of_day FROM label_frames l JOIN frames f USING(frame_id) WHERE f.space_id=?",
+            (space_id,)):
+        labelled[stratum(dow, part)] = labelled.get(stratum(dow, part), 0) + 1
+    candidates: dict[tuple[int, str], int] = {}
+    for fid, dow, part in conn.execute(
+            """SELECT frame_id, dow, part_of_day FROM frames f WHERE space_id=? AND capture_status='ok'
+                 AND processed_utc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM label_frames l WHERE l.frame_id=f.frame_id)
+               ORDER BY (frame_id * 7919) % 10007""", (space_id,)):
+        candidates.setdefault(stratum(dow, part), fid)                  # first in the stable order per stratum
+    if not candidates:
+        return None
+    order = {s: i for i, s in enumerate(STRATA)}
+    best = min(candidates, key=lambda s: (labelled.get(s, 0), order.get(s, len(order))))
+    return candidates[best]
+
+
+def quadrants(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """The photo cut into four full-resolution quarters (no overlap, so nothing is counted twice), for counting
+    dense areas that are too small to see in the whole-photo view."""
+    h, w = img.shape[:2]
+    my, mx = h // 2, w // 2
+    return [("Top left", img[:my, :mx]), ("Top right", img[:my, mx:]),
+            ("Bottom left", img[my:, :mx]), ("Bottom right", img[my:, mx:])]
 
 
 def save_label(conn: sqlite3.Connection, frame_id: int, counts: dict[str, int], *, usable: bool, labeler: str,

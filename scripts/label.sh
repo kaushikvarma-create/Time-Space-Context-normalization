@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Launch the blind labelling UI (needs the .venv with streamlit). Opens on http://localhost:8501
+# Launch the blind labelling UI (needs the .venv with streamlit). Opens on http://localhost:8501 (this machine only)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export TZ=Asia/Kolkata PYTHONPATH=src
-exec .venv/bin/streamlit run src/sbi/labeling/app.py "$@"
+exec .venv/bin/streamlit run src/sbi/labeling/app.py --server.address 127.0.0.1 --server.port 8501 \
+  --server.headless true --browser.gatherUsageStats false "$@"

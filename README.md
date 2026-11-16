@@ -50,6 +50,11 @@ What you look at:
 - `PYTHONPATH=src python3 -m sbi backtest --space parking`: simulated forecasts from past moments (rerun weekly).
 - `data/logs/tick.log`: everything the tick did, in IST.
 
+Labelling (`scripts/label.sh`, http://localhost:8501): photos come evenly from weekday/weekend x night, morning,
+afternoon, evening; dense areas can be counted in four full-resolution quarter tabs. Then `sbi eval` compares your
+counts with YOLO at every confidence threshold (with and without outline de-duplication) and with the VLM, and
+suggests `detector.class_conf` per object type (the strictest threshold within a small margin of the best).
+
 What you maintain: `config/site_calendar.yaml` (paste the office holiday list), `forecast_targets` and `probes` in
 the space files, and ~50 labelled photos per camera (`scripts/label.sh`) to measure accuracy against truth.
 
