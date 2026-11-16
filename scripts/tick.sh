@@ -15,7 +15,10 @@ if ! flock -n 9; then
   exit 0
 fi
 
-timeout 600 python3 -m sbi tick >> "$LOG" 2>&1
+# the project venv (system packages + Chronos-2 for scheduled forecasts); the system python if the venv is missing
+PY=.venv/bin/python
+[ -x "$PY" ] || PY=python3
+timeout 600 "$PY" -m sbi tick >> "$LOG" 2>&1
 rc=$?
 case $rc in
   0) ;;                                                    # all spaces ok

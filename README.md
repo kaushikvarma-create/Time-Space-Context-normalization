@@ -25,6 +25,8 @@ src/sbi/
   store/                 connection, transactions, numbered migrations, data-access modules
   pipeline.py            Engine 1: frame -> observations, scene state, events (one atomic transaction)
   baseline.py            per (space, weekday, hour) averages, always with n
+  sitecal.py             known-in-advance day types: site holiday file (+ optional `holidays` package)
+  dashboard/             read-only Streamlit dashboard (scripts/dashboard.sh)
   forecast/              table builder; Forecaster interface (Chronos-2, baselines); target/covariate choice;
                          leak-free backtest; metrics; live runner
   embedding.py scoring.py  catch-up paths: image vectors / probe scores for frames that lack them
@@ -33,6 +35,23 @@ src/sbi/
   labeling/ eval/        ground-truth labelling, accuracy report, label-free stability report
 tests/                   pytest, fakes only (no camera / GPU / LM Studio needed)
 ```
+
+## Running v1.0
+
+What runs on its own (cron, every 15 minutes, `scripts/tick.sh` with the project `.venv` interpreter):
+capture both cameras -> YOLO boxes + SAM 2 outlines + Qwen scene reading + DINOv2 image vector + SigLIP 2 probes ->
+SQLite -> baselines; and every `forecast.every_minutes` (60) a Chronos-2 forecast per space, stored with its inputs.
+Every stage is isolated: a failing model is logged and skipped, capture carries on.
+
+What you look at:
+- `scripts/dashboard.sh` -> http://localhost:8502 (this machine only, read-only): health of every stage over 24 h,
+  measured series with the latest forecast band, live forecast accuracy, the last backtest.
+- `PYTHONPATH=src python3 -m sbi accuracy --space parking`: stored forecasts scored against what then happened.
+- `PYTHONPATH=src python3 -m sbi backtest --space parking`: simulated forecasts from past moments (rerun weekly).
+- `data/logs/tick.log`: everything the tick did, in IST.
+
+What you maintain: `config/site_calendar.yaml` (paste the office holiday list), `forecast_targets` and `probes` in
+the space files, and ~50 labelled photos per camera (`scripts/label.sh`) to measure accuracy against truth.
 
 ## Run
 
@@ -52,6 +71,7 @@ among discovered object names; `scripts/curate.sh` for scheduled runs), `links` 
 unchanged, no VLM call), `stability --space ID --start '2026-11-14 00:00' --end '2026-11-14 05:00'` (how much
 each count wobbles inside a quiet window, in IST; a noise check that needs no labels), `embed --space ID`
 (store image vectors for frames that have none: history, or frames where the embedder failed),
+`accuracy --space ID [--since DATE]` (score stored forecasts against what happened, vs persistence),
 `forecast --space ID [--variant V] [--model chronos2|seasonal_mean|...]` (forecast with Chronos-2 and store the run and
 its quantiles in `forecast_runs` / `forecasts`), `backtest --space ID` (forecast from many past moments, score against
 what happened, compare models and covariate sets), `score --space ID` (score stored photos against the space's probe prompts: history, or a prompt you just added),

@@ -1,4 +1,5 @@
-"""One scheduled tick: for every space capture a frame, run Engine 1, refresh that hour's baseline.
+"""One scheduled tick: for every space capture a frame, run Engine 1, refresh that hour's baseline, and (every
+forecast.every_minutes) store a forecast per space.
 
 Failure isolation: a problem in one space never stops the others, and a perception outage never stops
 capture. Expected failures (SbiError) are logged as errors; anything else is a bug: logged with a traceback
@@ -16,6 +17,7 @@ from .errors import ConfigError, DetectorError, EmbedderError, SbiError, ScorerE
 from .ingest.capture import capture_frame
 from .perception.factory import (build_detector, build_embedder, build_frame_source, build_scene_reader,
                                       build_scorer, build_segmenter)
+from .forecast.models import Forecaster
 from .perception.types import Detector, Embedder, FrameSource, SceneReader, Scorer, Segmenter
 from .pipeline import process_frame
 from .settings import Settings, load_nvr_credentials
@@ -41,7 +43,8 @@ class SpaceOutcome:
 def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource | None = None,
              detector: Detector | None = None, reader: SceneReader | None = None, use_vlm: bool = True,
              now: datetime | None = None, segmenter: Segmenter | None = None,
-             embedder: Embedder | None = None, scorer: Scorer | None = None) -> list[SpaceOutcome]:
+             embedder: Embedder | None = None, scorer: Scorer | None = None,
+             forecaster: Forecaster | None = None) -> list[SpaceOutcome]:
     """Components can be injected (tests, alternative implementations); otherwise built from settings."""
     now = now or now_utc()
     conn = connect(settings.db_path)
@@ -88,9 +91,21 @@ def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource
         for space in spaces:
             outcomes.append(_run_space(conn, settings, space, source, detector, reader, now, segmenter, embedder,
                                        scorer))
+        _forecasts(conn, settings, spaces, now, forecaster)
         return outcomes
     finally:
         conn.close()
+
+
+def _forecasts(conn, settings: Settings, spaces: list[SpaceConfig], now: datetime, forecaster) -> None:
+    """Scheduled forecasts, fully contained: they can log errors but never change the tick's outcome."""
+    from .forecast.schedule import run_scheduled      # lazy: most ticks are not forecast ticks
+    try:
+        for f in run_scheduled(conn, settings, spaces, now, forecaster=forecaster):
+            if f.run_id is not None:
+                log.info("%s: forecast run %d stored", f.space_id, f.run_id)
+    except Exception:  # noqa: BLE001  last-resort boundary (run_scheduled already isolates each space)
+        log.exception("scheduled forecasting crashed (this is a bug); capture is unaffected")
 
 
 def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource, detector: Detector | None,

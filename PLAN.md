@@ -90,6 +90,13 @@ areas and counts); (4) 80% intervals cover 69-73% (cabin) and 77-78% (parking). 
 cron line), no known-future covariates beyond calendar (site holidays/events and weather forecasts are the published
 pattern), no two-stage model (TFMAdapter-style) yet.
 
+v1.0 prototype running (2026-11-16): the tick (now on the project .venv, which adds Chronos-2 to the same packages)
+stores a Chronos-2 forecast per space every hour; `sbi accuracy` scores stored forecasts against what happened (skill vs
+persistence, pooled over series after scaling each by its typical 15-minute change, because a per-series average was
+swamped by a series that did not move: parking showed -2.5 from one such series); site calendar adds known-future
+cal.is_holiday / cal.is_working_day (fixed-date national days filled in; the office list is to be pasted in; the
+`holidays` package is optional and was not installed); read-only dashboard on 127.0.0.1:8502.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.

@@ -91,6 +91,21 @@ class ScorerSettings(_Strict):
         return Path(self.model).name
 
 
+class CalendarSettings(_Strict):
+    """Known-in-advance day types (see sbi/sitecal.py)."""
+    country: str | None = "IN"                       # public holidays via the optional `holidays` package
+    subdivision: str | None = None                   # state code for regional holidays, if the package is used
+    site_file: str = "config/site_calendar.yaml"     # the office's own holiday list and closures (authoritative)
+    working_days: list[int] = [0, 1, 2, 3, 4]        # Monday = 0
+
+    @field_validator("working_days")
+    @classmethod
+    def _days(cls, v: list[int]) -> list[int]:
+        if not v or any(d not in range(7) for d in v) or len(set(v)) != len(v):
+            raise ValueError("working_days must be distinct weekday numbers 0 (Monday) .. 6 (Sunday)")
+        return v
+
+
 DEFAULT_VARIANTS: dict[str, list[str]] = {
     "univariate": [],                                  # the targets alone, no calendar
     "calendar": ["cal"],                               # + calendar (known in advance)
@@ -109,6 +124,9 @@ class ForecastSettings(_Strict):
     max_targets: int = Field(40, ge=1)                 # cap on forecast targets per space
     cross_learning: bool = False                       # let the model share information across targets (see docs)
     variant: str = "calendar"                          # covariate set for live forecasts; change after backtests
+    every_minutes: int = Field(0, ge=0)                # the tick forecasts every space this often (0 = never;
+                                                       # off unless config/pipeline.yaml switches it on)
+    scheduled_model: str = "chronos2"                  # forecaster the tick uses
     variants: dict[str, list[str]] = DEFAULT_VARIANTS
 
     @field_validator("quantiles")
@@ -124,6 +142,8 @@ class ForecastSettings(_Strict):
 
     @model_validator(mode="after")
     def _variant_known(self) -> "ForecastSettings":
+        if self.every_minutes and self.every_minutes % 15:
+            raise ValueError("forecast.every_minutes must be a multiple of the 15-minute tick (or 0 to switch off)")
         if self.variant not in self.variants:
             raise ValueError(f"forecast.variant {self.variant!r} is not one of {sorted(self.variants)}")
         return self
@@ -201,6 +221,7 @@ class Settings(_Strict):
     embedder: EmbedderSettings = EmbedderSettings()
     scorer: ScorerSettings = ScorerSettings()
     forecast: ForecastSettings = ForecastSettings()
+    calendar: CalendarSettings = CalendarSettings()
     scene_reader: SceneReaderSettings
     baseline: BaselineSettings = BaselineSettings()
     processing: ProcessingSettings = ProcessingSettings()

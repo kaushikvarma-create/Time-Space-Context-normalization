@@ -50,9 +50,17 @@ forecast:                       # `sbi forecast` / `sbi backtest`
   cross_learning: false         # let the model share information across targets in a batch (changes results)
   variant: calendar             # covariate set for live forecasts. Not yet backed by evidence: change it only after
                                 # `sbi backtest` shows another set beating `calendar` and the weekday-by-time average
+  every_minutes: 60             # the 15-minute tick also stores a forecast per space this often (0 = off)
+  scheduled_model: chronos2     # forecaster used by the tick
   # variants: covariate sets (column kinds a model may see; cal = calendar, known in advance). Defaults:
   #   univariate [] | calendar [cal] | detector [cal + counts, areas, cells, relations, scene fields, image stats]
   #   | full [detector + emb + probe]
+
+calendar:                       # known-in-advance day types: cal.is_holiday, cal.is_working_day
+  country: IN                   # public holidays, only if the optional `holidays` package is installed
+  subdivision: null             # state code for regional holidays (with the package)
+  site_file: config/site_calendar.yaml   # the office's own holiday list and closures: fill this in
+  working_days: [0, 1, 2, 3, 4] # Monday = 0; add 5 if the site works Saturdays
 
 scene_reader:                   # kind: lmstudio_openai (any OpenAI-compatible vision endpoint)
   kind: lmstudio_openai

@@ -14,7 +14,9 @@ dependencies = [
 
 [project.optional-dependencies]
 detector = ["ultralytics"]
-ui = ["streamlit"]
+ui = ["streamlit", "altair"]
+forecast = ["chronos-forecasting"]
+holidays = ["holidays"]          # optional: automatic public holidays (the site calendar file works without it)
 dev = ["pytest"]
 
 [tool.pytest.ini_options]

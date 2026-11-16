@@ -1,0 +1,13 @@
+# Days the site is closed or not a normal working day. These are known in advance, so the forecaster is told
+# about them for the future too (cal.is_holiday, cal.is_working_day).
+#
+# Paste your office's official holiday list here, one entry per day:  - {date: YYYY-MM-DD, name: "..."}
+# Only India's fixed-date national holidays are filled in below. Festivals whose date moves every year
+# (Holi, Eid, Diwali, Dussehra, ...) are deliberately NOT guessed: add them from your company's list.
+days:
+  - {date: 2026-01-26, name: Republic Day}
+  - {date: 2026-08-15, name: Independence Day}
+  - {date: 2026-10-02, name: Gandhi Jayanti}
+  - {date: 2027-01-26, name: Republic Day}
+  - {date: 2027-08-15, name: Independence Day}
+  - {date: 2027-10-02, name: Gandhi Jayanti}

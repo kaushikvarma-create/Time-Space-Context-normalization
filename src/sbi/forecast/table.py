@@ -63,6 +63,7 @@ from ..perception.geometry import union_area
 from ..perception.masks import decode_mask
 from ..store.embeddings import load_embeddings
 from ..store.scores import load_scores
+from ..sitecal import CalendarSpec
 from ..taxonomy import Taxonomy, load_taxonomy
 from .embed_features import embedding_features
 from .probe_features import concept_values
@@ -90,12 +91,17 @@ def is_variant(kind: str, source: str) -> bool:
 class TableResult:
     table: pd.DataFrame       # index: naive local timestamps (IST), regular step
     catalog: pd.DataFrame     # one row per dimension
+    cal: CalendarSpec = CalendarSpec()    # holidays / working days, so future calendar rows match the table's
 
 
-def calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
+def calendar(index: pd.DatetimeIndex, spec: CalendarSpec = CalendarSpec()) -> pd.DataFrame:
+    """Calendar columns, all known in advance. is_holiday / is_working_day come from the site calendar."""
+    holiday = np.array([d in spec.holidays for d in index.date], dtype=bool)
+    working = np.isin(index.dayofweek, sorted(spec.working_days)) & ~holiday
     return pd.DataFrame({
         "cal.hour": index.hour, "cal.minute_of_day": index.hour * 60 + index.minute, "cal.dow": index.dayofweek,
         "cal.is_weekend": (index.dayofweek >= 5).astype(int), "cal.slot_of_day": (index.hour * 60 + index.minute) // 15,
+        "cal.is_holiday": holiday.astype(int), "cal.is_working_day": working.astype(int),
     }, index=index)
 
 
@@ -125,7 +131,8 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 mask_dup_iou: float = 0.5, grid: tuple[int, int] | None = None,
                 cell_area_min: float = 0.02, embed_model: str | None = None, embed_components: int = 4,
                 embed_fit_end: str | None = None, probe_scorer: str | None = None,
-                probe_groups: dict[str, list[str]] | None = None) -> TableResult:
+                probe_groups: dict[str, list[str]] | None = None,
+                calendar_spec: CalendarSpec = CalendarSpec()) -> TableResult:
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
@@ -136,7 +143,7 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     t["vlm_ok"] = frames["vlm_ok"].astype(bool).reindex(index, fill_value=False)
     valid = t["slot_status"] == "ok"
     vlm_ok = valid & t["vlm_ok"]
-    t = t.join(calendar(index))
+    t = t.join(calendar(index, calendar_spec))
 
     floor = pd.to_numeric(frames["detector_min_conf"], errors="coerce").reindex(index)
     level_ok = {level_source(lv): valid & (floor <= lv + 1e-9) for lv in conf_levels}   # was the frame read that low?
@@ -233,7 +240,7 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                          counts[family("cellarea.")], counts[family("rel.")], cats, feat_w, emb_w, probe_w], axis=1)
     table = pd.concat([t, ordered], axis=1)
     return TableResult(table, _catalog(table, min_coverage, min_presence, min_valid_slots, min_present_slots,
-                                       frozenset(exclude_labels)))
+                                       frozenset(exclude_labels)), calendar_spec)
 
 
 def _embedding_columns(conn: sqlite3.Connection, space_id: str, index: pd.DatetimeIndex, fid_slot: dict,
@@ -370,7 +377,7 @@ def to_chronos(result: TableResult, space_id: str, targets: list[str], horizon: 
     context.insert(0, "id", space_id)
     step = table.index.freq or pd.tseries.frequencies.to_offset(pd.infer_freq(table.index))
     future_index = pd.date_range(table.index[-1] + step, periods=horizon, freq=step, name="timestamp")
-    future = calendar(future_index).reset_index()
+    future = calendar(future_index, result.cal).reset_index()
     future.insert(0, "id", space_id)
     if not calendar_inputs:                           # nothing known in advance: the future frame is just the clock
         future = future[["id", "timestamp"]]

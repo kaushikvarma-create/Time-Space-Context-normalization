@@ -24,6 +24,7 @@ from ..settings import ForecastSettings, TableSettings
 from .inputs import predict, prepare
 from .metrics import evaluate
 from .models import Forecaster
+from ..sitecal import CalendarSpec
 from .table import TableResult, build_catalog
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class BacktestPlan:
     variants: dict[str, list[str]]
     patterns: list[str]
     catalog_args: dict                          # thresholds for build_catalog (same as the table's)
+    cal: CalendarSpec = CalendarSpec()          # so the horizon's calendar rows match the table's
 
 
 @dataclass
@@ -63,7 +65,7 @@ def run_backtest(table: pd.DataFrame, space_id: str, forecasters: list[Forecaste
     for pos in origins:
         history = table.iloc[:pos + 1]
         truth = table.iloc[pos + 1:pos + 1 + plan.horizon]
-        result = TableResult(history, build_catalog(history, **plan.catalog_args))
+        result = TableResult(history, build_catalog(history, **plan.catalog_args), plan.cal)
         origin = history.index[-1]
         for fc in forecasters:
             for variant, kinds in ([("-", [])] if not fc.uses_covariates else list(plan.variants.items())):

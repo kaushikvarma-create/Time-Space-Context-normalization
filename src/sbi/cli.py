@@ -11,6 +11,7 @@
   embed       store whole-scene image vectors for frames that have none (history, or frames where it failed)
   forecast    forecast a space with a model (Chronos-2 by default) and store the run in the database
   backtest    forecast from many past moments, score against what happened, compare models and covariate sets
+  accuracy    score the forecasts actually made against what was later measured (and against persistence)
   score       score stored photos against the space's probe prompts (history, or a prompt you just added)
   table       build the Chronos-ready table + column catalog for a space (CSV in data/exports/)
   stability   label-free noise check: how steady each count is inside a quiet window (e.g. night)
@@ -70,6 +71,9 @@ def _parser() -> argparse.ArgumentParser:
     bt.add_argument("--variants", help="comma-separated covariate sets (default: all in forecast.variants)")
     bt.add_argument("--models", default="chronos2,seasonal_mean,seasonal_naive,persistence")
     bt.add_argument("--out", default="data/exports")
+    ac = sub.add_parser("accuracy"); ac.add_argument("--space", required=True)
+    ac.add_argument("--since", help="only runs made from this local time on, e.g. '2026-11-17'")
+    ac.add_argument("--out", default="data/exports")
     sc = sub.add_parser("score"); sc.add_argument("--space", required=True)
     sc.add_argument("--limit", type=int, help="stop after this many frames")
     em = sub.add_parser("embed"); em.add_argument("--space", required=True)
@@ -87,16 +91,8 @@ def _spaces_by_id(root: Path):
 
 
 def _build_table(conn, settings, space, start=None, end=None, fit_end=None):
-    from .forecast.table import build_table
-    tc = settings.table
-    return build_table(conn, space.space_id, tz=space.tz, step_minutes=tc.step_minutes, start=start, end=end,
-                       min_coverage=tc.min_coverage, min_presence=tc.min_presence,
-                       min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
-                       exclude_labels=tuple(tc.exclude_labels), conf_levels=tuple(tc.conf_levels),
-                       mask_dup_iou=tc.mask_dup_iou, grid=(space.grid.cols, space.grid.rows),
-                       cell_area_min=tc.cell_area_min, embed_model=settings.embedder.version,
-                       embed_components=tc.embed_components, embed_fit_end=fit_end,
-                       probe_scorer=settings.scorer.version, probe_groups=space.probes)
+    from .forecast.build import table_for
+    return table_for(conn, settings, space, start=start, end=end, fit_end=fit_end)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -190,14 +186,15 @@ def main(argv: list[str] | None = None) -> int:
                 names = [v.strip() for v in args.variants.split(",")] if args.variants else list(fcs.variants)
                 if any(v not in fcs.variants for v in names):
                     raise SbiError(f"unknown variant in {names}; choose from {sorted(fcs.variants)}")
+                whole_res = _build_table(conn, settings, space)
+                whole = whole_res.table
                 plan = BacktestPlan(
                     horizon=args.horizon or fcs.horizon, step=args.step, min_context=args.min_context or fcs.min_context,
                     quantiles=fcs.quantiles, variants={v: fcs.variants[v] for v in names},
-                    patterns=space.forecast_targets,
+                    patterns=space.forecast_targets, cal=whole_res.cal,
                     catalog_args=dict(min_coverage=tc.min_coverage, min_presence=tc.min_presence,
                                       min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
                                       exclude_labels=tuple(tc.exclude_labels)))
-                whole = _build_table(conn, settings, space).table
                 first = origins_for(len(whole), plan)
                 if not first:
                     raise SbiError(f"not enough history to backtest {args.space}: need at least "
@@ -219,6 +216,22 @@ def main(argv: list[str] | None = None) -> int:
                       "average); wql lower is better; coverage should be near the interval's nominal level")
                 print(overall(summary).round(3).to_string(index=False))
                 print(f"written: {out / (args.space + '_backtest.csv')} and _backtest_raw.csv")
+            elif args.cmd == "accuracy":
+                from .forecast.accuracy import by_lead, by_target, live_points
+                space = _spaces_by_id(settings.root).get(args.space)
+                if space is None:
+                    raise SbiError(f"unknown space {args.space!r}")
+                points = live_points(conn, args.space, _build_table(conn, settings, space).table, since=args.since)
+                if points.empty:
+                    print(f"{args.space}: no stored forecast has a measured outcome yet (forecasts are scored once "
+                          f"their time has passed)")
+                else:
+                    out = settings.resolve(args.out); out.mkdir(parents=True, exist_ok=True)
+                    by_target(points).to_csv(out / f"{args.space}_accuracy.csv", index=False)
+                    print(f"{args.space}: {points['run_id'].nunique()} forecast runs, {len(points)} scored points | "
+                          f"skill = 1 - MAE / MAE of holding the last value (positive is better)")
+                    print(by_lead(points).round(3).to_string(index=False))
+                    print(f"written: {out / (args.space + '_accuracy.csv')} (per target)")
             elif args.cmd == "score":
                 from .scoring import score_missing
                 space = _spaces_by_id(settings.root).get(args.space)
