@@ -114,6 +114,20 @@ class FakeEmbedder:
         return (1.0 + float(image.mean()) / 255.0 * np.arange(self.dim)).astype(np.float32)
 
 
+class FakeScorer:
+    """Scores each prompt from its text (so tests can predict values), or raises `error`. Records what was asked."""
+    version = "fake-scorer"
+
+    def __init__(self, values: dict[str, float] | None = None, error: Exception | None = None):
+        self.values, self.error, self.asked = values or {}, error, []
+
+    def score(self, image, prompts):
+        self.asked.append(list(prompts))
+        if self.error:
+            raise self.error
+        return [self.values.get(p, float(len(p) % 7) - 3.0) for p in prompts]
+
+
 def det(label: str, bbox, conf: float = 0.9, counted: bool = True) -> Detection:
     return Detection(label, conf, tuple(bbox), counted)
 

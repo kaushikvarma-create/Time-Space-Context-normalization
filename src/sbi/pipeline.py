@@ -11,6 +11,9 @@ Design:
   * An optional embedder stores a whole-scene vector per frame. EmbedderError is handled like SegmenterError:
     the frame is kept without a vector (unknown, not zero), and a vector stored earlier is never wiped by a
     failed re-run. `sbi embed` fills in the missing ones later.
+  * An optional scorer rates the photo against the space's plain-English probe prompts (`probes` in the space
+    file). ScorerError is handled the same way: the frame is kept without scores, and scores stored earlier are
+    never wiped by a failed re-run. `sbi score` fills in missing (frame, prompt) pairs later.
   * replay_vlm=True re-runs the detector only: the VLM part is rebuilt from the stored raw answer, unchanged.
   * VLMError is handled (frame kept with detector results, VLM fields NULL: missing is not zero).
     DetectorError and everything else propagate: the frame stays unprocessed and is retried from the backlog.
@@ -23,17 +26,17 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-import cv2
-
-from .errors import EmbedderError, SegmenterError, StorageError, VLMError
+from .errors import EmbedderError, ScorerError, SegmenterError, StorageError, VLMError
+from .imageio import read_frame_image
 from .grid import bbox_to_cell
 from .perception.geometry import overlap_links
 from .perception.normalise import canonical
 from .perception.masks import encode_mask
-from .perception.types import Detection, Detector, Embedder, SceneReader, SceneReading, SegMask, Segmenter
+from .perception.types import Detection, Detector, Embedder, SceneReader, SceneReading, Scorer, SegMask, Segmenter
 from .spaces import SpaceConfig
 from .store import results
 from .store.embeddings import put_embedding
+from .store.scores import put_scores
 from .store.db import transaction
 from .store.frames import get_frame
 from .store.registry import category_of
@@ -56,6 +59,7 @@ class FrameResult:
     vlm_ok: bool = False
     masks_ok: bool = False             # a segmenter ran for this frame
     embedded: bool = False             # a whole-scene vector was stored for this frame
+    scored: bool = False               # probe scores were stored for this frame
 
 
 def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tuple[SceneReading | None, str | None]:
@@ -76,14 +80,13 @@ def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tu
 
 def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, reader: SceneReader | None, *,
                   root: Path, replay_vlm: bool = False, segmenter: Segmenter | None = None,
-                  embedder: Embedder | None = None) -> FrameResult:
+                  embedder: Embedder | None = None, scorer: Scorer | None = None) -> FrameResult:
     frame = get_frame(conn, frame_id)
     if frame is None:
         raise StorageError(f"frame {frame_id} does not exist")
     if frame["capture_status"] != "ok" or not frame["image_path"]:
         return FrameResult(frame_id, False, reason=f"capture_status={frame['capture_status']}")
-    path = Path(frame["image_path"])
-    img = cv2.imread(str(path if path.is_absolute() else root / path))
+    img = read_frame_image(frame, root)
     if img is None:
         return FrameResult(frame_id, False, reason="image unreadable")
 
@@ -112,6 +115,18 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
             log.warning("%s frame %d: embedder unavailable, storing the frame without a vector: %s",
                         space.space_id, frame_id, e)
 
+    scores: dict[str, float] | None = None
+    prompts = space.probe_prompts
+    if scorer is not None and prompts:
+        try:
+            values = scorer.score(img, prompts)
+            if len(values) != len(prompts):
+                raise ScorerError(f"{len(values)} scores for {len(prompts)} prompts")
+            scores = dict(zip(prompts, values))
+        except ScorerError as e:
+            log.warning("%s frame %d: scorer unavailable, storing the frame without probe scores: %s",
+                        space.space_id, frame_id, e)
+
     reading: SceneReading | None = None
     vlm_error: str | None = None
     if replay_vlm:
@@ -128,7 +143,9 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
         res = _write(conn, space, frame, detections, reading, vlm_error, detector, masks, seg_version)
         if vector is not None and embedder is not None:
             put_embedding(conn, frame_id, embedder.version, vector)
-    return replace(res, embedded=vector is not None)
+        if scores is not None and scorer is not None:
+            put_scores(conn, frame_id, scorer.version, scores)
+    return replace(res, embedded=vector is not None, scored=scores is not None)
 
 
 def _write(conn, space: SpaceConfig, frame, all_detections: list[Detection], reading: SceneReading | None,

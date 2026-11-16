@@ -98,3 +98,15 @@ scene_fields:
   lighting: [daylight, artificial, dim, dark]
   door_state: [open, closed, unknown]
   tidiness: [tidy, ok, messy, unknown]
+
+# Plain-English descriptions scored on every photo (SigLIP 2). Each concept is a few paraphrases that are averaged,
+# so one wording does not decide the number. Add a concept or a prompt, then run `sbi score --space admin_cabin`
+# to ask it of every stored photo. Concepts that mostly track occupancy or brightness (tidy, messy) are kept
+# because they cost nothing, but check `sbi stability` before trusting them as separate signals.
+probes:
+  people:  ["a photo of an office with people working at desks", "several people sitting in an office", "a busy office with employees"]
+  empty:   ["an empty office with nobody in it", "an office with no people", "a deserted office room"]
+  lit:     ["a brightly lit office", "an office with the lights on", "a well lit room"]
+  dark:    ["a dark room with the lights off", "a dimly lit office at night", "an office in darkness"]
+  messy:   ["a messy cluttered desk with papers", "a disorganized desk with many items", "a desk covered in clutter"]
+  tidy:    ["a clean tidy desk", "a neat organized desk", "an uncluttered tidy workspace"]

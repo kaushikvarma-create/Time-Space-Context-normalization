@@ -37,6 +37,12 @@ Image-vector columns, when an embedder ran (see forecast/embed_features.py):
   emb.<model>.drift_prev / drift_typical   change since the previous slot / distance from the typical scene
 They need no detector and no VLM, so they exist for every embedded frame. NaN for frames never embedded.
 The principal directions are fit on `embed_fit_end` and earlier when given, otherwise on the whole table.
+
+Probe columns, when a scorer ran (see forecast/probe_features.py):
+  probe.<scorer>.<concept>   mean raw score of the concept's paraphrased prompts (SigLIP: a logit, 0 = even odds)
+Concepts come from the space file (`probes`). They are named, continuous descriptions of the scene (is it crowded,
+dark, cluttered, ...) and say nothing the detector did not need to find. NaN for frames not scored, or when any
+prompt of the concept is missing for that frame.
 """
 from __future__ import annotations
 
@@ -55,8 +61,10 @@ from ..errors import SbiError
 from ..perception.geometry import union_area
 from ..perception.masks import decode_mask
 from ..store.embeddings import load_embeddings
+from ..store.scores import load_scores
 from ..taxonomy import Taxonomy, load_taxonomy
 from .embed_features import embedding_features
+from .probe_features import concept_values
 from .mask_features import mask_features
 
 log = logging.getLogger(__name__)
@@ -115,7 +123,8 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 exclude_labels: tuple[str, ...] = (), conf_levels: tuple[float, ...] = (),
                 mask_dup_iou: float = 0.5, grid: tuple[int, int] | None = None,
                 cell_area_min: float = 0.02, embed_model: str | None = None, embed_components: int = 4,
-                embed_fit_end: str | None = None) -> TableResult:
+                embed_fit_end: str | None = None, probe_scorer: str | None = None,
+                probe_groups: dict[str, list[str]] | None = None) -> TableResult:
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
@@ -214,12 +223,13 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
               .add_prefix("feat.").reindex(index)) if not feats.empty else pd.DataFrame(index=index)
 
     emb_w = _embedding_columns(conn, space_id, index, fid_slot, embed_model, embed_components, embed_fit_end)
+    probe_w = _probe_columns(conn, space_id, index, fid_slot, probe_scorer, probe_groups or {})
 
     def family(prefix: str) -> list[str]:
         return sorted(c for c in counts.columns if c.startswith(prefix))
     ordered = pd.concat([num.reindex(index), img, counts[family("count.")], counts[family("area.")],
                          counts[family("rollup.")], counts[family("cell.")],
-                         counts[family("cellarea.")], counts[family("rel.")], cats, feat_w, emb_w], axis=1)
+                         counts[family("cellarea.")], counts[family("rel.")], cats, feat_w, emb_w, probe_w], axis=1)
     table = pd.concat([t, ordered], axis=1)
     return TableResult(table, _catalog(table, min_coverage, min_presence, min_valid_slots, min_present_slots,
                                        frozenset(exclude_labels)))
@@ -244,6 +254,23 @@ def _embedding_columns(conn: sqlite3.Connection, space_id: str, index: pd.Dateti
     name = re.sub(r"[^A-Za-z0-9_-]", "_", model.split("@")[0])        # a column source has no dots
     return pd.DataFrame({f"emb.{name}.{k}": v for k, v in embedding_features(mat, components=components,
                                                                             fit=fit).items()}, index=index)
+
+
+def _probe_columns(conn: sqlite3.Connection, space_id: str, index: pd.DatetimeIndex, fid_slot: dict,
+                   scorer: str | None, groups: dict[str, list[str]]) -> pd.DataFrame:
+    """probe.<scorer>.<concept> columns from the stored prompt scores; an empty frame when there are none."""
+    empty = pd.DataFrame(index=index)
+    if not scorer or not groups or not fid_slot:
+        return empty
+    scores = load_scores(conn, space_id, scorer, set(fid_slot))
+    if not scores:
+        return empty
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", scorer)                    # a column source has no dots
+    cols = {f"probe.{name}.{c}": pd.Series(np.nan, index=index) for c in groups}
+    for fid, by_prompt in scores.items():
+        for concept, value in concept_values(by_prompt, groups).items():
+            cols[f"probe.{name}.{concept}"].loc[fid_slot[fid]] = value
+    return pd.DataFrame(cols, index=index)
 
 
 def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_valid: int, min_present_slots: int,

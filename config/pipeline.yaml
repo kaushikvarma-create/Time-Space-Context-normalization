@@ -37,6 +37,10 @@ embedder:                       # whole-scene image vector per photo; kind: none
   model: facebook/dinov2-base   # Hugging Face id or local path; loaded from the local cache when present
   width: 448                    # input width (multiple of 14); height follows the camera's aspect (448 x 252)
 
+scorer:                         # rates every photo against the space's plain-English `probes`; kind: none stops new scores
+  kind: siglip2
+  model: google/siglip2-base-patch16-224   # Hugging Face id or local path; loaded from the local cache when present
+
 scene_reader:                   # kind: lmstudio_openai (any OpenAI-compatible vision endpoint)
   kind: lmstudio_openai
   base_url: http://10.20.0.1:1234

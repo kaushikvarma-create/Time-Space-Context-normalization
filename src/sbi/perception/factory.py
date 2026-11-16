@@ -4,8 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..errors import ConfigError
-from ..settings import DetectorSettings, EmbedderSettings, FrameSourceSettings, NvrCredentials, SceneReaderSettings, SegmenterSettings
-from .types import Detector, Embedder, FrameSource, SceneReader, Segmenter
+from ..settings import (DetectorSettings, EmbedderSettings, FrameSourceSettings, NvrCredentials,
+                        SceneReaderSettings, ScorerSettings, SegmenterSettings)
+from .types import Detector, Embedder, FrameSource, SceneReader, Scorer, Segmenter
 
 
 def build_detector(settings: DetectorSettings, root: Path) -> Detector:
@@ -31,6 +32,15 @@ def build_embedder(settings: EmbedderSettings, root: Path) -> Embedder | None:
         from .embedder_dinov2 import DinoV2Embedder
         return DinoV2Embedder(settings, root)
     raise ConfigError(f"unknown embedder kind {settings.kind!r}")
+
+
+def build_scorer(settings: ScorerSettings, root: Path) -> Scorer | None:
+    if settings.kind == "none":
+        return None
+    if settings.kind == "siglip2":
+        from .scorer_siglip2 import Siglip2Scorer
+        return Siglip2Scorer(settings, root)
+    raise ConfigError(f"unknown scorer kind {settings.kind!r}")
 
 
 def build_scene_reader(settings: SceneReaderSettings) -> SceneReader:

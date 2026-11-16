@@ -67,6 +67,16 @@ occupancy without any detector (parking pc1 vs motorcycle count r = 0.89; cabin 
 both confounded by the daily cycle, so not independent evidence yet). Unvalidated until labels exist. Per-cell
 vectors (a grid of local embeddings) are the natural next extension and are not stored yet.
 
+Probes (2026-11-16, migration 007): SigLIP 2 base (375M) scores every photo against each space's plain-English
+prompts (18 per space, 6 concepts of 3 paraphrases); raw logits stored per (frame, scorer, prompt); the table
+averages paraphrases into `probe.<scorer>.<concept>`. Tested first on 78 frames: paraphrase agreement mostly 0.8-0.98;
+base and so400m (1.1B) were a wash, so base. On 308 slots, cabin "people" r = 0.92 and parking "bikes" r = 0.78 with the
+detector counts (0.92 / 0.72 inside 09-19h, so not just the daily cycle); cabin tidy/messy (~0), parking "car"
+(0.01) and "person" (tracks brightness) do not hold up. Embedding the VLM's own summary text was tested and rejected:
+wording varies at night (night noise as large as the 3-day spread in the cabin). Next extractors on the list: metric
+depth, floor/"stuff" segmentation, pose keypoints (no identification), per-cell patch features, pixel change and
+camera-health flags.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.

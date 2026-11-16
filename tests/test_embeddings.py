@@ -72,7 +72,6 @@ def test_frames_missing_embedding_skips_done_failed_captures_and_other_models(co
     put_embedding(conn, ids[0], "m", E0)
     put_embedding(conn, ids[1], "other", E0)
     assert frames_missing_embedding(conn, "admin_cabin", "m") == ids[1:]
-    assert frames_missing_embedding(conn, "admin_cabin", "m", limit=1) == ids[1:2]
     assert frames_missing_embedding(conn, "parking", "m") == []
 
 
@@ -235,6 +234,10 @@ def test_backfill_fills_only_what_is_missing_and_reports_failures(conn, space, r
     again = embed_missing(conn, "admin_cabin", FakeEmbedder(error=EmbedderError("x")), root=root)
     assert (again.done, again.failed) == (0, 1)                                    # only the unreadable one is left
     assert embed_missing(conn, "admin_cabin", FakeEmbedder(), root=root, limit=0).done == 0
+    stuck = [frame(conn, space, root, thursday_ist(11, m), seed=m) for m in (0, 15)]      # newer frames, still missing
+    (root / conn.execute("SELECT image_path FROM frames WHERE frame_id=?", (ids[1],)).fetchone()[0]).unlink(missing_ok=True)
+    one = embed_missing(conn, "admin_cabin", FakeEmbedder(), root=root, limit=1)
+    assert (one.done, one.failed) == (1, 1) and sorted(load_embeddings(conn, "admin_cabin", "fake-emb@8")[0])[-1] == stuck[0]
 
 
 def test_backfill_survives_an_embedder_error_on_one_frame(conn, space, root):

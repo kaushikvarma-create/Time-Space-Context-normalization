@@ -9,6 +9,7 @@
   curate      find synonym ('same') and hierarchy ('is_a') links between object names, apply them, re-map history
   links       list taxonomy links            link-set ID approved|rejected   human decision (reversible)
   embed       store whole-scene image vectors for frames that have none (history, or frames where it failed)
+  score       score stored photos against the space's probe prompts (history, or a prompt you just added)
   table       build the Chronos-ready table + column catalog for a space (CSV in data/exports/)
   stability   label-free noise check: how steady each count is inside a quiet window (e.g. night)
 
@@ -25,7 +26,7 @@ from . import baseline
 from .errors import SbiError
 from .eval.vlm_eval import report
 from .logging_setup import configure_logging
-from .perception.factory import build_detector, build_embedder, build_scene_reader, build_segmenter
+from .perception.factory import build_detector, build_embedder, build_scene_reader, build_scorer, build_segmenter
 from .pipeline import process_frame
 from .settings import load_settings
 from .spaces import discover_space_files, load_space
@@ -57,6 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     ta.add_argument("--start"); ta.add_argument("--end"); ta.add_argument("--out", default="data/exports")
     ta.add_argument("--fit-end", help="learn the image-vector components from slots before this local time only "
                                       "(keeps a back-test's future out of the fit)")
+    sc = sub.add_parser("score"); sc.add_argument("--space", required=True)
+    sc.add_argument("--limit", type=int, help="stop after this many frames")
     em = sub.add_parser("embed"); em.add_argument("--space", required=True)
     em.add_argument("--limit", type=int, help="stop after this many frames")
     sb = sub.add_parser("stability"); sb.add_argument("--space", required=True)
@@ -80,7 +83,8 @@ def _build_table(conn, settings, space, start=None, end=None, fit_end=None):
                        exclude_labels=tuple(tc.exclude_labels), conf_levels=tuple(tc.conf_levels),
                        mask_dup_iou=tc.mask_dup_iou, grid=(space.grid.cols, space.grid.rows),
                        cell_area_min=tc.cell_area_min, embed_model=settings.embedder.version,
-                       embed_components=tc.embed_components, embed_fit_end=fit_end)
+                       embed_components=tc.embed_components, embed_fit_end=fit_end,
+                       probe_scorer=settings.scorer.version, probe_groups=space.probes)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -139,6 +143,21 @@ def main(argv: list[str] | None = None) -> int:
                     raise SbiError("embedder.kind is none in config/pipeline.yaml: nothing to embed with")
                 rep = embed_missing(conn, args.space, embedder, root=settings.root, limit=args.limit)
                 log.info("%s: embedded %d frames with %s%s", args.space, rep.done, embedder.version,
+                         f", {rep.failed} failed" if rep.failed else "")
+                if rep.failed:
+                    return 1
+            elif args.cmd == "score":
+                from .scoring import score_missing
+                space = _spaces_by_id(settings.root).get(args.space)
+                if space is None:
+                    raise SbiError(f"unknown space {args.space!r}")
+                if not space.probes:
+                    raise SbiError(f"{args.space} has no `probes` in its space file: nothing to score")
+                scorer = build_scorer(settings.scorer, settings.root)
+                if scorer is None:
+                    raise SbiError("scorer.kind is none in config/pipeline.yaml: nothing to score with")
+                rep = score_missing(conn, space, scorer, root=settings.root, limit=args.limit)
+                log.info("%s: scored %d frames with %s%s", args.space, rep.done, scorer.version,
                          f", {rep.failed} failed" if rep.failed else "")
                 if rep.failed:
                     return 1

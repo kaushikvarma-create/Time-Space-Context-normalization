@@ -12,11 +12,11 @@ from datetime import datetime
 from pathlib import Path
 
 from . import baseline
-from .errors import ConfigError, DetectorError, EmbedderError, SbiError, SegmenterError
+from .errors import ConfigError, DetectorError, EmbedderError, SbiError, ScorerError, SegmenterError
 from .ingest.capture import capture_frame
 from .perception.factory import (build_detector, build_embedder, build_frame_source, build_scene_reader,
-                                      build_segmenter)
-from .perception.types import Detector, Embedder, FrameSource, SceneReader, Segmenter
+                                      build_scorer, build_segmenter)
+from .perception.types import Detector, Embedder, FrameSource, SceneReader, Scorer, Segmenter
 from .pipeline import process_frame
 from .settings import Settings, load_nvr_credentials
 from .spaces import SpaceConfig, load_space
@@ -41,7 +41,7 @@ class SpaceOutcome:
 def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource | None = None,
              detector: Detector | None = None, reader: SceneReader | None = None, use_vlm: bool = True,
              now: datetime | None = None, segmenter: Segmenter | None = None,
-             embedder: Embedder | None = None) -> list[SpaceOutcome]:
+             embedder: Embedder | None = None, scorer: Scorer | None = None) -> list[SpaceOutcome]:
     """Components can be injected (tests, alternative implementations); otherwise built from settings."""
     now = now or now_utc()
     conn = connect(settings.db_path)
@@ -79,8 +79,15 @@ def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource
             except EmbedderError as e:       # image vectors are an extra: keep going without them
                 log.error("embedder unavailable, frames will be stored without image vectors: %s", e)
 
+        if scorer is None and detector is not None:
+            try:
+                scorer = build_scorer(settings.scorer, settings.root)
+            except ScorerError as e:         # probe scores are an extra: keep going without them
+                log.error("scorer unavailable, frames will be stored without probe scores: %s", e)
+
         for space in spaces:
-            outcomes.append(_run_space(conn, settings, space, source, detector, reader, now, segmenter, embedder))
+            outcomes.append(_run_space(conn, settings, space, source, detector, reader, now, segmenter, embedder,
+                                       scorer))
         return outcomes
     finally:
         conn.close()
@@ -88,7 +95,7 @@ def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource
 
 def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource, detector: Detector | None,
                reader: SceneReader | None, now: datetime, segmenter: Segmenter | None = None,
-               embedder: Embedder | None = None) -> SpaceOutcome:
+               embedder: Embedder | None = None, scorer: Scorer | None = None) -> SpaceOutcome:
     try:
         cap = capture_frame(conn, space, source, root=settings.root, image_dir=settings.image_dir, now=now)
         processed = 0
@@ -99,7 +106,7 @@ def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource
             for fid in todo:
                 try:
                     res = process_frame(conn, space, fid, detector, reader, root=settings.root,
-                                        segmenter=segmenter, embedder=embedder)
+                                        segmenter=segmenter, embedder=embedder, scorer=scorer)
                 except DetectorError as e:
                     log.error("%s frame %d: detector failed, leaving it queued: %s", space.space_id, fid, e)
                     break                    # do not hammer a broken detector with the rest of the backlog
@@ -108,11 +115,12 @@ def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource
                     continue
                 if res.processed:
                     processed += 1
-                    log.info("%s frame %d: people yolo=%s vlm=%s boxes=%d stored=%d%s%s%s", space.space_id, fid,
+                    log.info("%s frame %d: people yolo=%s vlm=%s boxes=%d stored=%d%s%s%s%s", space.space_id, fid,
                              res.people_yolo, res.people_vlm, res.boxes, res.boxes_stored,
                              "" if res.vlm_ok else " (no VLM)",
                              "" if res.masks_ok or segmenter is None else " (no outlines)",
-                             "" if res.embedded or embedder is None else " (no image vector)")
+                             "" if res.embedded or embedder is None else " (no image vector)",
+                             "" if res.scored or scorer is None or not space.probes else " (no probe scores)")
         if processed:
             d = time_dims(now, space.tz)
             baseline.rebuild(conn, space.space_id, alpha=settings.baseline.ewm_alpha, dow=d.dow, hour=d.hour)

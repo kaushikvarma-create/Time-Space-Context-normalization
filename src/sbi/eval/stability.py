@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-KINDS = ("scene", "count", "area", "rollup", "emb")
+KINDS = ("scene", "count", "area", "rollup", "emb", "probe")
 
 
 def stability(table: pd.DataFrame, *, start: str | None = None, end: str | None = None,

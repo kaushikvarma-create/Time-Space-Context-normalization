@@ -29,6 +29,10 @@ class EmbedderError(SbiError):
     """The image-embedding model could not load or run. Frames are still processed, without an embedding."""
 
 
+class ScorerError(SbiError):
+    """The text-prompt scoring model could not load or run. Frames are still processed, without probe scores."""
+
+
 class VLMError(SbiError):
     """The scene-reading model failed after retries or returned an unusable answer."""
 

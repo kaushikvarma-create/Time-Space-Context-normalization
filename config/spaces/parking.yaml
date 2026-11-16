@@ -57,3 +57,12 @@ scene_fields:
   lighting: [daylight, artificial, dim, dark]
   weather_visible: [clear, cloudy, rain, fog, unknown]
   occupancy_level: [empty, sparse, moderate, full]
+
+# Plain-English descriptions scored on every photo (SigLIP 2); see admin_cabin.yaml for how they are used.
+probes:
+  bikes:   ["a parking area full of motorcycles", "many motorbikes parked closely together", "a crowded two-wheeler parking lot"]
+  empty:   ["an empty parking area", "a parking lot with no vehicles", "an empty concrete parking floor"]
+  car:     ["a car parked in a parking area", "a parked car", "a sedan in a garage"]
+  night:   ["a parking garage at night", "a dark parking area under artificial light", "a parking lot after dark"]
+  day:     ["a parking area in bright daylight", "sunlight in a parking garage", "a parking lot during the day"]
+  person:  ["people walking in a parking area", "a person standing near parked vehicles", "pedestrians in a parking lot"]

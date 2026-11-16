@@ -3,7 +3,8 @@ or frames where it failed). The live pipeline embeds new frames itself (pipeline
 catch-up path and shares the same storage function, so both write identical rows.
 
 A frame that cannot be embedded (unreadable image, embedder failure) is counted and skipped; it never stops
-the run, and nothing is written for it (unknown, not zero).
+the run, and nothing is written for it (unknown, not zero). `limit` counts frames actually embedded, so a frame
+that keeps failing cannot use up every limited run.
 """
 from __future__ import annotations
 
@@ -11,9 +12,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
-
 from .errors import EmbedderError
+from .imageio import read_frame_image
 from .perception.types import Embedder
 from .store.db import transaction
 from .store.embeddings import frames_missing_embedding, put_embedding
@@ -30,10 +30,11 @@ class EmbedReport:
 
 def embed_missing(conn, space_id: str, embedder: Embedder, *, root: Path, limit: int | None = None) -> EmbedReport:
     done = failed = 0
-    for fid in frames_missing_embedding(conn, space_id, embedder.version, limit):
+    for fid in frames_missing_embedding(conn, space_id, embedder.version):
+        if limit is not None and done >= limit:
+            break
         frame = get_frame(conn, fid)
-        path = Path(frame["image_path"])
-        img = cv2.imread(str(path if path.is_absolute() else root / path))
+        img = read_frame_image(frame, root)
         if img is None:
             log.warning("%s frame %d: image unreadable, skipping", space_id, fid)
             failed += 1

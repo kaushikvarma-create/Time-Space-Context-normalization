@@ -1,6 +1,6 @@
 """Data types and the interfaces (Protocols) every perception component implements.
 
-To add a new detector / segmenter / embedder / scene reader / camera source: implement the Protocol, register it in
+To add a new detector / segmenter / embedder / scorer / scene reader / camera source: implement the Protocol, register it in
 `factory.py`, and add its `kind` to the settings model. No pipeline code changes.
 """
 from __future__ import annotations
@@ -80,6 +80,14 @@ class Embedder(Protocol):
     def embed(self, image: np.ndarray) -> np.ndarray:
         """One float32 vector of length `dim` describing the whole scene (BGR image in).
         Raise EmbedderError on failure."""
+
+
+class Scorer(Protocol):
+    version: str          # model identity: scores from different models are different scales, never mixed
+
+    def score(self, image: np.ndarray, prompts: list[str]) -> list[float]:
+        """One raw score per prompt, same order (BGR image in): how well the photo matches each plain-English
+        description. Raise ScorerError on failure."""
 
 
 class SceneReader(Protocol):

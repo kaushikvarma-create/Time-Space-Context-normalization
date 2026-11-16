@@ -51,6 +51,9 @@ class SpaceConfig(_Strict):
     aliases: dict[str, str] = {}
     detector_map: dict[str, str] = {}
     scene_fields: dict[str, list[str]] = {}
+    # Plain-English descriptions to score on every photo, grouped by concept. Several paraphrases per concept:
+    # the table averages them, so one unlucky wording does not move the number.
+    probes: dict[str, list[str]] = {}
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "SpaceConfig":
@@ -72,12 +75,31 @@ class SpaceConfig(_Strict):
             x1, y1, x2, y2 = r
             if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
                 problems.append(f"mask region {r} must be normalised [x1,y1,x2,y2] with x1<x2, y1<y2")
+        seen: dict[str, str] = {}
+        for concept, prompts in self.probes.items():
+            if not _LABEL.match(concept):
+                problems.append(f"probe concept {concept!r} must be lowercase snake_case")
+            if not prompts:
+                problems.append(f"probe concept {concept!r} has no prompts")
+            for p in prompts:
+                if not p.strip() or len(p) > 200:
+                    problems.append(f"probe prompt {p!r} in {concept!r} must be 1-200 characters")
+                if p in seen and seen[p] != concept:
+                    problems.append(f"probe prompt {p!r} is used by both {seen[p]!r} and {concept!r}")
+                seen[p] = concept
+            if len(set(prompts)) != len(prompts):
+                problems.append(f"probe concept {concept!r} repeats a prompt")
         for name, values in self.scene_fields.items():
             if not values:
                 problems.append(f"scene field {name!r} has no allowed values")
         if problems:
             raise ValueError("; ".join(problems))
         return self
+
+    @property
+    def probe_prompts(self) -> list[str]:
+        """Every distinct probe prompt of this space, in a stable order."""
+        return list(dict.fromkeys(p for prompts in self.probes.values() for p in prompts))
 
 
 def load_space(path: Path | str) -> SpaceConfig:

@@ -80,6 +80,17 @@ class EmbedderSettings(_Strict):
         return f"{Path(self.model).name}@{self.width}"
 
 
+class ScorerSettings(_Strict):
+    """Scores every photo against the space's probe prompts (see SpaceConfig.probes). `model` is kept when kind
+    is none so the table can still read scores stored earlier."""
+    kind: Literal["none", "siglip2"] = "none"        # none = no new scores are stored
+    model: str = "google/siglip2-base-patch16-224"   # Hugging Face id or a local path
+
+    @property
+    def version(self) -> str:
+        return Path(self.model).name
+
+
 class SceneReaderSettings(_Strict):
     kind: Literal["lmstudio_openai"] = "lmstudio_openai"
     base_url: str
@@ -150,6 +161,7 @@ class Settings(_Strict):
     detector: DetectorSettings = DetectorSettings()
     segmenter: SegmenterSettings = SegmenterSettings()
     embedder: EmbedderSettings = EmbedderSettings()
+    scorer: ScorerSettings = ScorerSettings()
     scene_reader: SceneReaderSettings
     baseline: BaselineSettings = BaselineSettings()
     processing: ProcessingSettings = ProcessingSettings()

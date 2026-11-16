@@ -54,15 +54,10 @@ def load_embeddings(conn: sqlite3.Connection, space_id: str, model: str,
     return out, corrupt
 
 
-def frames_missing_embedding(conn: sqlite3.Connection, space_id: str, model: str,
-                             limit: int | None = None) -> list[int]:
+def frames_missing_embedding(conn: sqlite3.Connection, space_id: str, model: str) -> list[int]:
     """Captured frames with a readable image path and no vector for this model, oldest first."""
     sql = ("SELECT f.frame_id FROM frames f LEFT JOIN frame_embeddings e "
            "ON e.frame_id=f.frame_id AND e.model=? "
            "WHERE f.space_id=? AND f.capture_status='ok' AND f.image_path IS NOT NULL AND e.frame_id IS NULL "
            "ORDER BY f.ts_utc")
-    params: list = [model, space_id]
-    if limit is not None:
-        sql += " LIMIT ?"
-        params.append(limit)
-    return [r[0] for r in conn.execute(sql, params)]
+    return [r[0] for r in conn.execute(sql, (model, space_id))]
