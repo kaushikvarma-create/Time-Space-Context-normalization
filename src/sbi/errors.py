@@ -33,6 +33,10 @@ class ScorerError(SbiError):
     """The text-prompt scoring model could not load or run. Frames are still processed, without probe scores."""
 
 
+class ForecastError(SbiError):
+    """A forecaster could not load or run, or there is not enough data to forecast."""
+
+
 class VLMError(SbiError):
     """The scene-reading model failed after retries or returned an unusable answer."""
 

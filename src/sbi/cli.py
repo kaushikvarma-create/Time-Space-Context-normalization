@@ -9,6 +9,8 @@
   curate      find synonym ('same') and hierarchy ('is_a') links between object names, apply them, re-map history
   links       list taxonomy links            link-set ID approved|rejected   human decision (reversible)
   embed       store whole-scene image vectors for frames that have none (history, or frames where it failed)
+  forecast    forecast a space with a model (Chronos-2 by default) and store the run in the database
+  backtest    forecast from many past moments, score against what happened, compare models and covariate sets
   score       score stored photos against the space's probe prompts (history, or a prompt you just added)
   table       build the Chronos-ready table + column catalog for a space (CSV in data/exports/)
   stability   label-free noise check: how steady each count is inside a quiet window (e.g. night)
@@ -58,6 +60,16 @@ def _parser() -> argparse.ArgumentParser:
     ta.add_argument("--start"); ta.add_argument("--end"); ta.add_argument("--out", default="data/exports")
     ta.add_argument("--fit-end", help="learn the image-vector components from slots before this local time only "
                                       "(keeps a back-test's future out of the fit)")
+    fc = sub.add_parser("forecast"); fc.add_argument("--space", required=True)
+    fc.add_argument("--variant", help="covariate set (default: forecast.variant in config/pipeline.yaml)")
+    fc.add_argument("--horizon", type=int, help="slots ahead (default: forecast.horizon)")
+    fc.add_argument("--model", default="chronos2", help="chronos2 | seasonal_mean | seasonal_naive | persistence")
+    bt = sub.add_parser("backtest"); bt.add_argument("--space", required=True)
+    bt.add_argument("--horizon", type=int); bt.add_argument("--min-context", type=int)
+    bt.add_argument("--step", type=int, default=8, help="slots between forecast origins (default 8 = 2 hours)")
+    bt.add_argument("--variants", help="comma-separated covariate sets (default: all in forecast.variants)")
+    bt.add_argument("--models", default="chronos2,seasonal_mean,seasonal_naive,persistence")
+    bt.add_argument("--out", default="data/exports")
     sc = sub.add_parser("score"); sc.add_argument("--space", required=True)
     sc.add_argument("--limit", type=int, help="stop after this many frames")
     em = sub.add_parser("embed"); em.add_argument("--space", required=True)
@@ -146,6 +158,67 @@ def main(argv: list[str] | None = None) -> int:
                          f", {rep.failed} failed" if rep.failed else "")
                 if rep.failed:
                     return 1
+            elif args.cmd == "forecast":
+                from .forecast.models import build_forecaster
+                from .forecast.runner import forecast_space
+                space = _spaces_by_id(settings.root).get(args.space)
+                if space is None:
+                    raise SbiError(f"unknown space {args.space!r}")
+                fcs = settings.forecast
+                forecaster = build_forecaster(args.model, model=fcs.model, cross_learning=fcs.cross_learning)
+                run = forecast_space(conn, space, _build_table(conn, settings, space), forecaster, settings=fcs,
+                                     table_settings=settings.table, variant=args.variant, horizon=args.horizon,
+                                     step_minutes=settings.table.step_minutes)
+                print(f"{args.space}: run {run.run_id} | {forecaster.name} | origin {run.origin} IST | "
+                      f"{len(run.targets)} targets, {len(run.covariates)} past covariates")
+                shown = run.forecast[run.forecast["step"] <= 4]
+                for tgt in run.targets[:6]:
+                    rows = shown[shown["target"] == tgt]
+                    print(f"  {tgt}: " + " | ".join(
+                        f"{r.timestamp:%H:%M} " + "/".join(f"{getattr(r, c):.2f}" for c in run.forecast.columns
+                                                          if c.startswith("q")) for r in rows.itertuples()))
+                print(f"stored in forecast_runs / forecasts (run_id {run.run_id}); quantiles in column order: "
+                      f"{', '.join(c for c in run.forecast.columns if c.startswith('q'))}")
+            elif args.cmd == "backtest":
+                from .forecast.backtest import BacktestPlan, origins_for, run_backtest
+                from .forecast.metrics import overall, summarise
+                from .forecast.models import build_forecaster
+                space = _spaces_by_id(settings.root).get(args.space)
+                if space is None:
+                    raise SbiError(f"unknown space {args.space!r}")
+                fcs, tc = settings.forecast, settings.table
+                names = [v.strip() for v in args.variants.split(",")] if args.variants else list(fcs.variants)
+                if any(v not in fcs.variants for v in names):
+                    raise SbiError(f"unknown variant in {names}; choose from {sorted(fcs.variants)}")
+                plan = BacktestPlan(
+                    horizon=args.horizon or fcs.horizon, step=args.step, min_context=args.min_context or fcs.min_context,
+                    quantiles=fcs.quantiles, variants={v: fcs.variants[v] for v in names},
+                    patterns=space.forecast_targets,
+                    catalog_args=dict(min_coverage=tc.min_coverage, min_presence=tc.min_presence,
+                                      min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
+                                      exclude_labels=tuple(tc.exclude_labels)))
+                whole = _build_table(conn, settings, space).table
+                first = origins_for(len(whole), plan)
+                if not first:
+                    raise SbiError(f"not enough history to backtest {args.space}: need at least "
+                                   f"{plan.min_context + plan.horizon} slots")
+                # image-vector components are learned from the history before the first origin only (no look-ahead)
+                res = _build_table(conn, settings, space, fit_end=str(whole.index[first[0]]))
+                forecasters = [build_forecaster(m.strip(), model=fcs.model, cross_learning=fcs.cross_learning)
+                               for m in args.models.split(",")]
+                bt = run_backtest(res.table, args.space, forecasters, plan, settings=fcs, table_settings=tc)
+                summary = summarise(bt.raw)
+                out = settings.resolve(args.out); out.mkdir(parents=True, exist_ok=True)
+                bt.raw.to_csv(out / f"{args.space}_backtest_raw.csv", index=False)
+                summary.to_csv(out / f"{args.space}_backtest.csv", index=False)
+                print(f"{args.space}: {bt.origins} origins every {plan.step} slots, {plan.horizon} slots ahead, "
+                      f"{plan.min_context}+ slots of history, {len(summary['target'].unique()) if len(summary) else 0} targets")
+                if bt.failures:
+                    print(f"skipped origins: {bt.failures}")
+                print("skill = 1 - MAE / MAE of seasonal_mean on the same points (positive beats the weekday-by-time "
+                      "average); wql lower is better; coverage should be near the interval's nominal level")
+                print(overall(summary).round(3).to_string(index=False))
+                print(f"written: {out / (args.space + '_backtest.csv')} and _backtest_raw.csv")
             elif args.cmd == "score":
                 from .scoring import score_missing
                 space = _spaces_by_id(settings.root).get(args.space)

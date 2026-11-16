@@ -54,6 +54,9 @@ class SpaceConfig(_Strict):
     # Plain-English descriptions to score on every photo, grouped by concept. Several paraphrases per concept:
     # the table averages them, so one unlucky wording does not move the number.
     probes: dict[str, list[str]] = {}
+    # What to forecast: table column names or shell-style patterns ("count.yolo.*", "probe.*.people"). Patterns
+    # are matched against the table's model-ready columns when a forecast runs, so new object types are picked up.
+    forecast_targets: list[str] = []
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "SpaceConfig":
@@ -75,6 +78,8 @@ class SpaceConfig(_Strict):
             x1, y1, x2, y2 = r
             if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
                 problems.append(f"mask region {r} must be normalised [x1,y1,x2,y2] with x1<x2, y1<y2")
+        if any(not t.strip() for t in self.forecast_targets) or len(set(self.forecast_targets)) != len(self.forecast_targets):
+            problems.append("forecast_targets must be distinct, non-empty column names or patterns")
         seen: dict[str, str] = {}
         for concept, prompts in self.probes.items():
             if not _LABEL.match(concept):

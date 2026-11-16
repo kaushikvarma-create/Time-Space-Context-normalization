@@ -41,6 +41,19 @@ scorer:                         # rates every photo against the space's plain-En
   kind: siglip2
   model: google/siglip2-base-patch16-224   # Hugging Face id or local path; loaded from the local cache when present
 
+forecast:                       # `sbi forecast` / `sbi backtest`
+  model: amazon/chronos-2       # Hugging Face id; zero-shot (no training on our data)
+  quantiles: [0.1, 0.5, 0.9]    # whole percents, must include 0.5 (the point forecast); stored as q10, q50, q90
+  horizon: 16                   # slots ahead (16 x 15 min = 4 hours)
+  min_context: 96               # slots of history required before forecasting (96 = 1 day)
+  max_targets: 40               # cap on targets per space (what to forecast is `forecast_targets` in the space file)
+  cross_learning: false         # let the model share information across targets in a batch (changes results)
+  variant: calendar             # covariate set for live forecasts. Not yet backed by evidence: change it only after
+                                # `sbi backtest` shows another set beating `calendar` and the weekday-by-time average
+  # variants: covariate sets (column kinds a model may see; cal = calendar, known in advance). Defaults:
+  #   univariate [] | calendar [cal] | detector [cal + counts, areas, cells, relations, scene fields, image stats]
+  #   | full [detector + emb + probe]
+
 scene_reader:                   # kind: lmstudio_openai (any OpenAI-compatible vision endpoint)
   kind: lmstudio_openai
   base_url: http://10.20.0.1:1234

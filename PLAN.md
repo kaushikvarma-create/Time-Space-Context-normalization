@@ -77,6 +77,19 @@ wording varies at night (night noise as large as the 3-day spread in the cabin).
 depth, floor/"stuff" segmentation, pose keypoints (no identification), per-cell patch features, pixel change and
 camera-health flags.
 
+Forecasting stage (2026-11-16, migration 008): `sbi forecast` runs Chronos-2 zero-shot per space (26 cabin / 15 parking
+targets from `forecast_targets`) and stores each run with its inputs; `sbi backtest` is the leak-free evaluation. First
+result on 4.3 days of data (26 origins, 4 h ahead, 10,712 / 6,148 scored points), skill vs the weekday-by-time average:
+Chronos-2 about 0.49 in every covariate set (cabin: full 0.493, calendar 0.489, univariate 0.489; parking: univariate
+0.497, others 0.494), persistence 0.43 / 0.45, seasonal naive 0.07. Reading it honestly: (1) the weekday-by-time average is
+a weak bar here (a Friday, a near-empty weekend, a Monday), so persistence is the real one; (2) Chronos loses to
+persistence on 10 of 26 cabin and 6 of 15 parking targets; (3) covariates move a target by less than 0.02 for 20/26 and
+14/15 targets, so no covariate set is shown to help or hurt (5 cabin targets gain 0.03-0.07, mostly keyboard/bottle
+areas and counts); (4) 80% intervals cover 69-73% (cabin) and 77-78% (parking). Re-run weekly; decide
+`forecast.variant` only after at least 2-3 weeks. Known gaps: no scheduled forecast job (needs your approval to add a
+cron line), no known-future covariates beyond calendar (site holidays/events and weather forecasts are the published
+pattern), no two-stage model (TFMAdapter-style) yet.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.

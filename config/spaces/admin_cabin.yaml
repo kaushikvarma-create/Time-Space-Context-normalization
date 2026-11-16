@@ -110,3 +110,7 @@ probes:
   dark:    ["a dark room with the lights off", "a dimly lit office at night", "an office in darkness"]
   messy:   ["a messy cluttered desk with papers", "a disorganized desk with many items", "a desk covered in clutter"]
   tidy:    ["a clean tidy desk", "a neat organized desk", "an uncluttered tidy workspace"]
+
+# What `sbi forecast` predicts: table column names or wildcards, matched against the table's model-ready columns
+# (so a new object type is picked up on its own). Threshold variants (count.yolo_c05.*) match only by exact name.
+forecast_targets: ["scene.people_yolo", "scene.people_vlm", "count.yolo.*", "area.sam2.*", "probe.*.people", "probe.*.empty"]

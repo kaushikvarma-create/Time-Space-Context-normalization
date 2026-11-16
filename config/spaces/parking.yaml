@@ -66,3 +66,6 @@ probes:
   night:   ["a parking garage at night", "a dark parking area under artificial light", "a parking lot after dark"]
   day:     ["a parking area in bright daylight", "sunlight in a parking garage", "a parking lot during the day"]
   person:  ["people walking in a parking area", "a person standing near parked vehicles", "pedestrians in a parking lot"]
+
+# What `sbi forecast` predicts (see admin_cabin.yaml).
+forecast_targets: ["scene.vehicles_yolo", "scene.people_yolo", "count.yolo.*", "count.vlm.motorcycle", "area.sam2.*", "probe.*.bikes", "probe.*.empty"]

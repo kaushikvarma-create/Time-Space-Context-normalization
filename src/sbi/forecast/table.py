@@ -52,6 +52,7 @@ import re
 import sqlite3
 import warnings
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 
 import numpy as np
@@ -273,6 +274,13 @@ def _probe_columns(conn: sqlite3.Connection, space_id: str, index: pd.DatetimeIn
     return pd.DataFrame(cols, index=index)
 
 
+def build_catalog(table: pd.DataFrame, *, min_coverage: float, min_presence: float, min_valid_slots: int,
+                  min_present_slots: int, exclude_labels: tuple[str, ...] = ()) -> pd.DataFrame:
+    """The column catalog for any slice of a table (a backtest builds it from the history before each forecast, so
+    column selection never sees the future)."""
+    return _catalog(table, min_coverage, min_presence, min_valid_slots, min_present_slots, frozenset(exclude_labels))
+
+
 def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_valid: int, min_present_slots: int,
              exclude_labels: frozenset[str]) -> pd.DataFrame:
     rows = []
@@ -319,14 +327,17 @@ def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_
 
 
 def select_covariates(catalog: pd.DataFrame, *, targets: list[str], max_covariates: int, always: list[str],
-                      min_autocorr: float, autocorr_min_slots: int) -> list[str]:
+                      min_autocorr: float, autocorr_min_slots: int, kinds: Collection[str] | None = None) -> list[str]:
     """Default model inputs: `always` columns (if eligible), then eligible columns ranked by smoothness
     (lag-1 autocorrelation; real occupancy changes smoothly, model noise flickers) and coverage.
     Variants (other thresholds such as count.yolo_cNN.*, and de-duplicated counts) are near-copies of a primary
     series, so they are only used when named in `always`; otherwise they would crowd real inputs out of the cap.
     Smoothness only filters once there are enough slots to estimate it (about +-0.23 noise at 19 slots).
+    `kinds` limits the choice to those column kinds (a covariate-set variant); None means any kind.
     Every other column stays in the table; this only picks what a model gets by default."""
     ready = catalog[catalog["model_ready"] & (catalog["kind"] != "cal") & ~catalog["column"].isin(targets)].copy()
+    if kinds is not None:
+        ready = ready[ready["kind"].isin(set(kinds))]
     chosen = [c for c in always if c in set(ready["column"])]
     rest = ready[~ready["column"].isin(chosen) & ~ready["variant"]].copy()
     rest["ac"] = rest["autocorr1"].astype(float).fillna(0.0)
@@ -337,7 +348,7 @@ def select_covariates(catalog: pd.DataFrame, *, targets: list[str], max_covariat
 
 
 def to_chronos(result: TableResult, space_id: str, targets: list[str], horizon: int,
-               covariates: list[str] | None = None, **select_kw) -> tuple[pd.DataFrame, pd.DataFrame]:
+               covariates: list[str] | None = None, calendar_inputs: bool = True, **select_kw) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(context_df, future_df) in the long format of Chronos2Pipeline.predict_df(id_column='id',
     timestamp_column='timestamp', target=targets). Calendar columns go in both frames (known-future covariates);
     every other covariate is past-only. Default covariates = select_covariates(**select_kw)."""
@@ -347,7 +358,7 @@ def to_chronos(result: TableResult, space_id: str, targets: list[str], horizon: 
     missing = [c for c in targets if c not in table.columns]
     if missing:
         raise ValueError(f"unknown target columns: {missing}")
-    cal_cols = [c for c in table.columns if c.startswith("cal.")]
+    cal_cols = [c for c in table.columns if c.startswith("cal.")] if calendar_inputs else []
     if covariates is None:
         opts = {"max_covariates": 24, "always": [], "min_autocorr": 0.3, "autocorr_min_slots": 96} | select_kw
         covariates = select_covariates(cat, targets=targets, **opts)
@@ -361,4 +372,6 @@ def to_chronos(result: TableResult, space_id: str, targets: list[str], horizon: 
     future_index = pd.date_range(table.index[-1] + step, periods=horizon, freq=step, name="timestamp")
     future = calendar(future_index).reset_index()
     future.insert(0, "id", space_id)
+    if not calendar_inputs:                           # nothing known in advance: the future frame is just the clock
+        future = future[["id", "timestamp"]]
     return context, future

@@ -16,7 +16,7 @@ scripts/
 src/sbi/
   settings.py spaces.py  typed, validated config (unknown keys / bad references fail loudly)
   errors.py              SbiError hierarchy: ConfigError CameraError DetectorError SegmenterError EmbedderError
-                         ScorerError VLMError StorageError
+                         ScorerError ForecastError VLMError StorageError
   timeutil.py            IST time dimensions; ts_utc is canonical, everything else is local time
   grid.py                box -> grid cell (the VLM never sees the grid)
   ingest/                camera sources (NVR RTSP) and capture (image + frame row)
@@ -25,6 +25,8 @@ src/sbi/
   store/                 connection, transactions, numbered migrations, data-access modules
   pipeline.py            Engine 1: frame -> observations, scene state, events (one atomic transaction)
   baseline.py            per (space, weekday, hour) averages, always with n
+  forecast/              table builder; Forecaster interface (Chronos-2, baselines); target/covariate choice;
+                         leak-free backtest; metrics; live runner
   embedding.py scoring.py  catch-up paths: image vectors / probe scores for frames that lack them
   imageio.py             read a stored frame's image
   tick.py cli.py         orchestration with per-space failure isolation; `python -m sbi <command>`
@@ -50,7 +52,9 @@ among discovered object names; `scripts/curate.sh` for scheduled runs), `links` 
 unchanged, no VLM call), `stability --space ID --start '2026-11-14 00:00' --end '2026-11-14 05:00'` (how much
 each count wobbles inside a quiet window, in IST; a noise check that needs no labels), `embed --space ID`
 (store image vectors for frames that have none: history, or frames where the embedder failed),
-`score --space ID` (score stored photos against the space's probe prompts: history, or a prompt you just added),
+`forecast --space ID [--variant V] [--model chronos2|seasonal_mean|...]` (forecast with Chronos-2 and store the run and
+its quantiles in `forecast_runs` / `forecasts`), `backtest --space ID` (forecast from many past moments, score against
+what happened, compare models and covariate sets), `score --space ID` (score stored photos against the space's probe prompts: history, or a prompt you just added),
 `table --space ID --fit-end '2026-11-14 12:00'` (learn the image-vector components from earlier slots only).
 Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
 
@@ -93,12 +97,21 @@ Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
   Add a prompt, run `sbi score`, and only the new question is asked of every stored photo. Checked against a
   detector, "people" (cabin) and "bikes" (parking) hold up, also within daytime; tidy/messy, parking "car" and
   "person" do not, so treat a probe as a measurement only after `sbi stability` and labels agree.
+- **Forecasting:** `forecast_targets` in the space file say what to forecast (names or wildcards, matched against the
+  table's model-ready columns). A *variant* is a named covariate set (`forecast.variants`: univariate, calendar,
+  detector, full); calendar is known in advance, everything else is past-only and chosen by the catalog's selection
+  rule. Every forecast is stored with the model, variant, targets and covariates it used. Count-like targets are
+  clipped at 0. The backtest rebuilds the column catalog from the history before each origin and gives the model
+  only rows up to it, so it cannot see the future; baselines (persistence, seasonal naive, seasonal mean) are the
+  bar. `forecast.variant` stays `calendar` until a backtest shows another set winning on enough data.
 - **Chronos table:** regular IST grid, NaN for missing slots (never 0, never a dropped row), every dimension kept;
   the catalog says which columns are eligible and why, and a small default set is selected for models.
 
 ## Extending
 
 - **New space:** add `config/spaces/<id>.yaml` (copy an existing one). No code changes; the next tick picks it up.
+- **New forecaster (Timestral, TimesFM, a two-stage model):** implement `Forecaster` in `forecast/models.py`, register it in
+  `build_forecaster`; live runs, the backtest and storage need no change.
 - **New detector / segmenter / embedder / scorer / scene reader / camera source:** implement the Protocol in `perception/types.py`, register its
   `kind` in `perception/factory.py` and in the settings model, select it in `config/pipeline.yaml`.
 - **New object type:** nothing to do. Unknown labels become `object_registry` rows flagged `auto_new`, and

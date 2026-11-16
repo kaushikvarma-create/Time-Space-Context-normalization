@@ -91,6 +91,44 @@ class ScorerSettings(_Strict):
         return Path(self.model).name
 
 
+DEFAULT_VARIANTS: dict[str, list[str]] = {
+    "univariate": [],                                  # the targets alone, no calendar
+    "calendar": ["cal"],                               # + calendar (known in advance)
+    "detector": ["cal", "scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat"],
+    "full": ["cal", "scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat", "emb", "probe"],
+}
+
+
+class ForecastSettings(_Strict):
+    """Forecasting stage. A variant is a named covariate set: the column kinds a forecaster may be given
+    (`cal` = calendar, known in advance; the rest are past-only, chosen by the catalog's selection rule)."""
+    model: str = "amazon/chronos-2"
+    quantiles: list[float] = [0.1, 0.5, 0.9]
+    horizon: int = Field(16, ge=1, le=1024)            # slots ahead (16 x 15 min = 4 h)
+    min_context: int = Field(96, ge=8)                 # slots of history needed before forecasting (96 = 1 day)
+    max_targets: int = Field(40, ge=1)                 # cap on forecast targets per space
+    cross_learning: bool = False                       # let the model share information across targets (see docs)
+    variant: str = "calendar"                          # covariate set for live forecasts; change after backtests
+    variants: dict[str, list[str]] = DEFAULT_VARIANTS
+
+    @field_validator("quantiles")
+    @classmethod
+    def _quantiles(cls, v: list[float]) -> list[float]:
+        if not v or any(not 0 < q < 1 for q in v) or v != sorted(set(v)):
+            raise ValueError("quantiles must be strictly increasing values between 0 and 1")
+        if any(abs(q * 100 - round(q * 100)) > 1e-9 for q in v):
+            raise ValueError("quantiles must be whole percents (0.1, 0.25, ...): they name the columns q10, q25, ...")
+        if 0.5 not in v:
+            raise ValueError("quantiles must include 0.5 (the point forecast)")
+        return v
+
+    @model_validator(mode="after")
+    def _variant_known(self) -> "ForecastSettings":
+        if self.variant not in self.variants:
+            raise ValueError(f"forecast.variant {self.variant!r} is not one of {sorted(self.variants)}")
+        return self
+
+
 class SceneReaderSettings(_Strict):
     kind: Literal["lmstudio_openai"] = "lmstudio_openai"
     base_url: str
@@ -162,6 +200,7 @@ class Settings(_Strict):
     segmenter: SegmenterSettings = SegmenterSettings()
     embedder: EmbedderSettings = EmbedderSettings()
     scorer: ScorerSettings = ScorerSettings()
+    forecast: ForecastSettings = ForecastSettings()
     scene_reader: SceneReaderSettings
     baseline: BaselineSettings = BaselineSettings()
     processing: ProcessingSettings = ProcessingSettings()
