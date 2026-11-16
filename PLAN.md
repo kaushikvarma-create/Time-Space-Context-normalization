@@ -58,6 +58,15 @@ Outlines are stored; the table derives `area.sam2*.<type>`, `cellarea.sam2.<cell
 become 19 after outline de-duplication (about 20+ by eye). Unvalidated until labels exist. Known limit: SAM 2
 cannot add objects YOLO missed, and one box around a cluster of bikes still counts as one.
 
+Image vectors (2026-11-16, migration 006): DINOv2-base turns every photo into one 1536-number vector (448 x 252
+input, [CLS | mean patch], about 40 ms and 0.4 GB). Stored raw per (frame, model); the table derives
+`emb.dinov2-base.pc1..pc4`, `drift_prev` and `drift_typical`. Probe before building: the camera's burned-in clock
+does not move the vector (night-to-night change 0.0055 with it, 0.0053 with it blanked), and night-to-night noise
+is 14x (cabin) to 100x (parking) smaller than the day-to-night change. On the 606 stored frames the columns track
+occupancy without any detector (parking pc1 vs motorcycle count r = 0.89; cabin drift_typical vs people r = 0.91;
+both confounded by the daily cycle, so not independent evidence yet). Unvalidated until labels exist. Per-cell
+vectors (a grid of local embeddings) are the natural next extension and are not stored yet.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.

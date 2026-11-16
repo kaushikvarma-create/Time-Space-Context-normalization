@@ -60,6 +60,26 @@ class SegmenterSettings(_Strict):
     batch: int = Field(64, ge=1)                     # boxes per model call
 
 
+class EmbedderSettings(_Strict):
+    """Whole-scene image vectors. `model` and `width` are kept even when kind is none, so the table can still
+    read the vectors stored earlier."""
+    kind: Literal["none", "dinov2"] = "none"         # none = no new vectors are stored
+    model: str = "facebook/dinov2-base"              # Hugging Face id or a local path
+    width: int = Field(448, ge=56, le=1792)          # input width in pixels; height follows the photo's aspect
+
+    @field_validator("width")
+    @classmethod
+    def _patch_multiple(cls, v: int) -> int:
+        if v % 14:
+            raise ValueError("width must be a multiple of 14 (the DINOv2 patch size)")
+        return v
+
+    @property
+    def version(self) -> str:
+        """Identifies the vector space: stored with every vector and used to pick vectors back out."""
+        return f"{Path(self.model).name}@{self.width}"
+
+
 class SceneReaderSettings(_Strict):
     kind: Literal["lmstudio_openai"] = "lmstudio_openai"
     base_url: str
@@ -94,6 +114,7 @@ class TableSettings(_Strict):
     always_include: list[str] = []
     min_autocorr: float = Field(0.3, ge=-1, le=1)
     autocorr_min_slots: int = Field(96, ge=3)        # smoothness filter only once there is ~1 day of slots
+    embed_components: int = Field(4, ge=0, le=64)    # principal components of the image vectors, as emb.*.pcN
     conf_levels: list[float] = [0.05, 0.10]          # extra detector thresholds to count at (count.yolo_cNN.*)
     mask_dup_iou: float = Field(0.5, gt=0, le=1)     # same-type outlines overlapping this much = one object
     cell_area_min: float = Field(0.02, ge=0, lt=1)   # smaller cell coverage is edge spill, recorded as 0
@@ -128,6 +149,7 @@ class Settings(_Strict):
     frame_source: FrameSourceSettings = FrameSourceSettings()
     detector: DetectorSettings = DetectorSettings()
     segmenter: SegmenterSettings = SegmenterSettings()
+    embedder: EmbedderSettings = EmbedderSettings()
     scene_reader: SceneReaderSettings
     baseline: BaselineSettings = BaselineSettings()
     processing: ProcessingSettings = ProcessingSettings()

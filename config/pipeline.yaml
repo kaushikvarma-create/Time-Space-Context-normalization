@@ -32,6 +32,11 @@ segmenter:                      # outlines every stored detector box; kind: none
   mask_width: 384               # stored outline resolution (384 x 216 for a 16:9 camera)
   batch: 64
 
+embedder:                       # whole-scene image vector per photo; kind: none stops new vectors (old ones stay)
+  kind: dinov2
+  model: facebook/dinov2-base   # Hugging Face id or local path; loaded from the local cache when present
+  width: 448                    # input width (multiple of 14); height follows the camera's aspect (448 x 252)
+
 scene_reader:                   # kind: lmstudio_openai (any OpenAI-compatible vision endpoint)
   kind: lmstudio_openai
   base_url: http://10.20.0.1:1234
@@ -68,4 +73,5 @@ table:                          # the Chronos-ready table (sbi table)
   autocorr_min_slots: 96        # ...but only once there is about a day of slots to estimate that reliably
   mask_dup_iou: 0.5             # same-type outlines overlapping this much are one object boxed twice
   cell_area_min: 0.02           # outline covering less than 2% of a grid cell is edge spill, recorded as 0
+  embed_components: 4           # principal components of the image vectors: emb.<model>.pc1..pc4
   conf_levels: [0.05, 0.10]     # extra detector thresholds to count at: count.yolo_c05.<type>, count.yolo_c10.<type>

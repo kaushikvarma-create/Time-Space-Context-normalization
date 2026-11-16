@@ -25,6 +25,10 @@ class SegmenterError(SbiError):
     """The segmenter (mask model) could not load or run. Frames are still processed, without masks."""
 
 
+class EmbedderError(SbiError):
+    """The image-embedding model could not load or run. Frames are still processed, without an embedding."""
+
+
 class VLMError(SbiError):
     """The scene-reading model failed after retries or returned an unusable answer."""
 

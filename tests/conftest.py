@@ -97,6 +97,23 @@ class FakeSegmenter:
         return out
 
 
+class FakeEmbedder:
+    """Returns the vectors it was given in order (or one derived from the image), or raises `error`."""
+    version = "fake-emb@8"
+    dim = 8
+
+    def __init__(self, vectors=None, error: Exception | None = None):
+        self.vectors, self.error, self.calls = list(vectors or []), error, 0
+
+    def embed(self, image):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        if self.vectors:
+            return np.asarray(self.vectors.pop(0), dtype=np.float32)
+        return (1.0 + float(image.mean()) / 255.0 * np.arange(self.dim)).astype(np.float32)
+
+
 def det(label: str, bbox, conf: float = 0.9, counted: bool = True) -> Detection:
     return Detection(label, conf, tuple(bbox), counted)
 

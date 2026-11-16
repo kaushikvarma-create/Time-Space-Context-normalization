@@ -8,6 +8,7 @@
   eval        accuracy report against human labels
   curate      find synonym ('same') and hierarchy ('is_a') links between object names, apply them, re-map history
   links       list taxonomy links            link-set ID approved|rejected   human decision (reversible)
+  embed       store whole-scene image vectors for frames that have none (history, or frames where it failed)
   table       build the Chronos-ready table + column catalog for a space (CSV in data/exports/)
   stability   label-free noise check: how steady each count is inside a quiet window (e.g. night)
 
@@ -24,7 +25,7 @@ from . import baseline
 from .errors import SbiError
 from .eval.vlm_eval import report
 from .logging_setup import configure_logging
-from .perception.factory import build_detector, build_scene_reader, build_segmenter
+from .perception.factory import build_detector, build_embedder, build_scene_reader, build_segmenter
 from .pipeline import process_frame
 from .settings import load_settings
 from .spaces import discover_space_files, load_space
@@ -54,6 +55,10 @@ def _parser() -> argparse.ArgumentParser:
     ls.add_argument("status", choices=["approved", "rejected"])
     ta = sub.add_parser("table"); ta.add_argument("--space", required=True)
     ta.add_argument("--start"); ta.add_argument("--end"); ta.add_argument("--out", default="data/exports")
+    ta.add_argument("--fit-end", help="learn the image-vector components from slots before this local time only "
+                                      "(keeps a back-test's future out of the fit)")
+    em = sub.add_parser("embed"); em.add_argument("--space", required=True)
+    em.add_argument("--limit", type=int, help="stop after this many frames")
     sb = sub.add_parser("stability"); sb.add_argument("--space", required=True)
     sb.add_argument("--start", help="quiet window start, local time, e.g. '2026-11-14 00:00'")
     sb.add_argument("--end", help="quiet window end, local time")
@@ -66,7 +71,7 @@ def _spaces_by_id(root: Path):
     return {s.space_id: s for s in (load_space(f) for f in discover_space_files(root))}
 
 
-def _build_table(conn, settings, space, start=None, end=None):
+def _build_table(conn, settings, space, start=None, end=None, fit_end=None):
     from .forecast.table import build_table
     tc = settings.table
     return build_table(conn, space.space_id, tz=space.tz, step_minutes=tc.step_minutes, start=start, end=end,
@@ -74,7 +79,8 @@ def _build_table(conn, settings, space, start=None, end=None):
                        min_valid_slots=tc.min_valid_slots, min_present_slots=tc.min_present_slots,
                        exclude_labels=tuple(tc.exclude_labels), conf_levels=tuple(tc.conf_levels),
                        mask_dup_iou=tc.mask_dup_iou, grid=(space.grid.cols, space.grid.rows),
-                       cell_area_min=tc.cell_area_min)
+                       cell_area_min=tc.cell_area_min, embed_model=settings.embedder.version,
+                       embed_components=tc.embed_components, embed_fit_end=fit_end)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,6 +130,18 @@ def main(argv: list[str] | None = None) -> int:
                 log.info("reprocessed %d/%d frames%s", done, len(ids), f", {failed} failed" if failed else "")
                 if failed:
                     return 1
+            elif args.cmd == "embed":
+                from .embedding import embed_missing
+                if args.space not in _spaces_by_id(settings.root):
+                    raise SbiError(f"unknown space {args.space!r}")
+                embedder = build_embedder(settings.embedder, settings.root)
+                if embedder is None:
+                    raise SbiError("embedder.kind is none in config/pipeline.yaml: nothing to embed with")
+                rep = embed_missing(conn, args.space, embedder, root=settings.root, limit=args.limit)
+                log.info("%s: embedded %d frames with %s%s", args.space, rep.done, embedder.version,
+                         f", {rep.failed} failed" if rep.failed else "")
+                if rep.failed:
+                    return 1
             elif args.cmd == "eval":
                 print(report(conn))
             elif args.cmd == "curate":
@@ -154,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
                 if space is None:
                     raise SbiError(f"unknown space {args.space!r}")
                 tc = settings.table
-                res = _build_table(conn, settings, space, args.start, args.end)
+                res = _build_table(conn, settings, space, args.start, args.end, args.fit_end)
                 out = settings.resolve(args.out); out.mkdir(parents=True, exist_ok=True)
                 res.table.to_csv(out / f"{args.space}_table.csv", index_label="timestamp")
                 res.catalog.to_csv(out / f"{args.space}_catalog.csv", index=False)
@@ -177,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                 rep = stability(_build_table(conn, settings, space).table, start=args.start, end=args.end)
                 out = settings.resolve(args.out); out.mkdir(parents=True, exist_ok=True)
                 rep.to_csv(out / f"{args.space}_stability.csv", index=False)
-                shown = rep[rep["window_mean"] >= args.min_mean].drop(columns=["kind", "source"])
+                shown = rep[rep["window_mean"].abs() >= args.min_mean].drop(columns=["kind", "source"])
                 print(f"{args.space}: quiet window {args.start or 'start'} .. {args.end or 'end'} ({space.tz}); "
                       f"noise = mean change between consecutive slots, snr = spread / noise (higher is better)")
                 print(shown.to_string(index=False) if len(shown) else "no columns with data in that window")

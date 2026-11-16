@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-KINDS = ("scene", "count", "area", "rollup")
+KINDS = ("scene", "count", "area", "rollup", "emb")
 
 
 def stability(table: pd.DataFrame, *, start: str | None = None, end: str | None = None,
@@ -43,7 +43,7 @@ def stability(table: pd.DataFrame, *, start: str | None = None, end: str | None 
         else:
             snr = spread / noise
         rows.append({"column": col, "kind": parts[0], "source": parts[1] if len(parts) >= 3 else "",
-                     "object": parts[-1], "pairs": pairs, "window_mean": round(level, 3), "noise": round(noise, 4),
+                     "object": parts[-1], "pairs": pairs, "window_mean": round(level, 3), "noise": round(noise, 5),
                      "changed_share": round(float((step.dropna() > 0).mean()), 3), "spread": round(spread, 4),
                      "snr": snr if np.isnan(snr) or np.isinf(snr) else round(snr, 2)})
     out = pd.DataFrame(rows, columns=["column", "kind", "source", "object", "pairs", "window_mean", "noise",

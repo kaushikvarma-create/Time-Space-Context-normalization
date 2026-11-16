@@ -31,10 +31,17 @@ Outline (mask) columns, when a segmenter ran: sources `sam2` (counted boxes) and
   area.sam2*.<type>   share of the image covered by outlines      cellarea.sam2*.<cell>.<type>  share of a cell
 cellarea is built for the counted boxes only. All are NaN for frames no segmenter outlined. Only area.sam2.*
 and cellarea.sam2.* can be default inputs.
+
+Image-vector columns, when an embedder ran (see forecast/embed_features.py):
+  emb.<model>.pc1..pcN   position along the main directions in which the scene varies (N = embed_components)
+  emb.<model>.drift_prev / drift_typical   change since the previous slot / distance from the typical scene
+They need no detector and no VLM, so they exist for every embedded frame. NaN for frames never embedded.
+The principal directions are fit on `embed_fit_end` and earlier when given, otherwise on the whole table.
 """
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import warnings
@@ -47,9 +54,12 @@ import pandas as pd
 from ..errors import SbiError
 from ..perception.geometry import union_area
 from ..perception.masks import decode_mask
+from ..store.embeddings import load_embeddings
 from ..taxonomy import Taxonomy, load_taxonomy
+from .embed_features import embedding_features
 from .mask_features import mask_features
 
+log = logging.getLogger(__name__)
 META = ["slot_status", "frame_id", "vlm_ok"]
 CAT_COLUMNS = ["lighting", "door_state", "tidiness", "weather_visible"]
 COUNT_KINDS = {"count", "rollup", "cell", "rel", "area", "cellarea"}
@@ -104,7 +114,8 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 min_presence: float = 0.05, min_valid_slots: int = 8, min_present_slots: int = 3,
                 exclude_labels: tuple[str, ...] = (), conf_levels: tuple[float, ...] = (),
                 mask_dup_iou: float = 0.5, grid: tuple[int, int] | None = None,
-                cell_area_min: float = 0.02) -> TableResult:
+                cell_area_min: float = 0.02, embed_model: str | None = None, embed_components: int = 4,
+                embed_fit_end: str | None = None) -> TableResult:
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
@@ -202,14 +213,37 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     feat_w = (feats.assign(slot=feats["frame_id"].map(fid_slot)).pivot_table(index="slot", columns="name", values="value")
               .add_prefix("feat.").reindex(index)) if not feats.empty else pd.DataFrame(index=index)
 
+    emb_w = _embedding_columns(conn, space_id, index, fid_slot, embed_model, embed_components, embed_fit_end)
+
     def family(prefix: str) -> list[str]:
         return sorted(c for c in counts.columns if c.startswith(prefix))
     ordered = pd.concat([num.reindex(index), img, counts[family("count.")], counts[family("area.")],
                          counts[family("rollup.")], counts[family("cell.")],
-                         counts[family("cellarea.")], counts[family("rel.")], cats, feat_w], axis=1)
+                         counts[family("cellarea.")], counts[family("rel.")], cats, feat_w, emb_w], axis=1)
     table = pd.concat([t, ordered], axis=1)
     return TableResult(table, _catalog(table, min_coverage, min_presence, min_valid_slots, min_present_slots,
                                        frozenset(exclude_labels)))
+
+
+def _embedding_columns(conn: sqlite3.Connection, space_id: str, index: pd.DatetimeIndex, fid_slot: dict,
+                       model: str | None, components: int, fit_end: str | None) -> pd.DataFrame:
+    """emb.<model>.* columns from the stored image vectors; an empty frame when there are none."""
+    empty = pd.DataFrame(index=index)
+    if not model or not fid_slot:
+        return empty
+    vectors, corrupt = load_embeddings(conn, space_id, model, set(fid_slot))
+    if corrupt:
+        log.warning("%s: %d corrupt image vectors left out (frames %s)", space_id, len(corrupt), corrupt[:5])
+    if not vectors:
+        return empty
+    mat = np.full((len(index), next(iter(vectors.values())).size), np.nan, dtype=np.float32)
+    position = {slot: i for i, slot in enumerate(index)}
+    for fid, vec in vectors.items():
+        mat[position[fid_slot[fid]]] = vec
+    fit = None if fit_end is None else np.asarray(index < pd.Timestamp(fit_end))
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", model.split("@")[0])        # a column source has no dots
+    return pd.DataFrame({f"emb.{name}.{k}": v for k, v in embedding_features(mat, components=components,
+                                                                            fit=fit).items()}, index=index)
 
 
 def _catalog(table: pd.DataFrame, min_coverage: float, min_presence: float, min_valid: int, min_present_slots: int,

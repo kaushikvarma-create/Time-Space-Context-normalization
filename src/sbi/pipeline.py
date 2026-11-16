@@ -8,6 +8,9 @@ Design:
     and people/vehicle totals. Thresholds can therefore change later without re-running the model.
   * An optional segmenter outlines every stored box. SegmenterError is handled like VLMError: the frame is
     kept and its masks are NULL (unknown, not zero).
+  * An optional embedder stores a whole-scene vector per frame. EmbedderError is handled like SegmenterError:
+    the frame is kept without a vector (unknown, not zero), and a vector stored earlier is never wiped by a
+    failed re-run. `sbi embed` fills in the missing ones later.
   * replay_vlm=True re-runs the detector only: the VLM part is rebuilt from the stored raw answer, unchanged.
   * VLMError is handled (frame kept with detector results, VLM fields NULL: missing is not zero).
     DetectorError and everything else propagate: the frame stays unprocessed and is retried from the backlog.
@@ -22,14 +25,15 @@ from pathlib import Path
 
 import cv2
 
-from .errors import SegmenterError, StorageError, VLMError
+from .errors import EmbedderError, SegmenterError, StorageError, VLMError
 from .grid import bbox_to_cell
 from .perception.geometry import overlap_links
 from .perception.normalise import canonical
 from .perception.masks import encode_mask
-from .perception.types import Detection, Detector, SceneReader, SceneReading, SegMask, Segmenter
+from .perception.types import Detection, Detector, Embedder, SceneReader, SceneReading, SegMask, Segmenter
 from .spaces import SpaceConfig
 from .store import results
+from .store.embeddings import put_embedding
 from .store.db import transaction
 from .store.frames import get_frame
 from .store.registry import category_of
@@ -51,6 +55,7 @@ class FrameResult:
     boxes_stored: int = 0              # all raw detections, counted or not
     vlm_ok: bool = False
     masks_ok: bool = False             # a segmenter ran for this frame
+    embedded: bool = False             # a whole-scene vector was stored for this frame
 
 
 def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tuple[SceneReading | None, str | None]:
@@ -70,7 +75,8 @@ def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tu
 
 
 def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, reader: SceneReader | None, *,
-                  root: Path, replay_vlm: bool = False, segmenter: Segmenter | None = None) -> FrameResult:
+                  root: Path, replay_vlm: bool = False, segmenter: Segmenter | None = None,
+                  embedder: Embedder | None = None) -> FrameResult:
     frame = get_frame(conn, frame_id)
     if frame is None:
         raise StorageError(f"frame {frame_id} does not exist")
@@ -95,6 +101,17 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
                         space.space_id, frame_id, e)
     seg_version = segmenter.version if segmenter is not None and masks is not None else None
 
+    vector = None
+    if embedder is not None:
+        try:
+            vector = embedder.embed(img)
+            if vector.shape != (embedder.dim,):
+                raise EmbedderError(f"vector of shape {vector.shape}, expected ({embedder.dim},)")
+        except EmbedderError as e:
+            vector = None
+            log.warning("%s frame %d: embedder unavailable, storing the frame without a vector: %s",
+                        space.space_id, frame_id, e)
+
     reading: SceneReading | None = None
     vlm_error: str | None = None
     if replay_vlm:
@@ -108,7 +125,10 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
                         space.space_id, frame_id, vlm_error)
 
     with transaction(conn):
-        return _write(conn, space, frame, detections, reading, vlm_error, detector, masks, seg_version)
+        res = _write(conn, space, frame, detections, reading, vlm_error, detector, masks, seg_version)
+        if vector is not None and embedder is not None:
+            put_embedding(conn, frame_id, embedder.version, vector)
+    return replace(res, embedded=vector is not None)
 
 
 def _write(conn, space: SpaceConfig, frame, all_detections: list[Detection], reading: SceneReading | None,

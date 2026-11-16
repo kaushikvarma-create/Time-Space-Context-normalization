@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..errors import ConfigError
-from ..settings import DetectorSettings, FrameSourceSettings, NvrCredentials, SceneReaderSettings, SegmenterSettings
-from .types import Detector, FrameSource, SceneReader, Segmenter
+from ..settings import DetectorSettings, EmbedderSettings, FrameSourceSettings, NvrCredentials, SceneReaderSettings, SegmenterSettings
+from .types import Detector, Embedder, FrameSource, SceneReader, Segmenter
 
 
 def build_detector(settings: DetectorSettings, root: Path) -> Detector:
@@ -22,6 +22,15 @@ def build_segmenter(settings: SegmenterSettings, root: Path) -> Segmenter | None
         from .segmenter_sam2 import Sam2Segmenter
         return Sam2Segmenter(settings, root)
     raise ConfigError(f"unknown segmenter kind {settings.kind!r}")
+
+
+def build_embedder(settings: EmbedderSettings, root: Path) -> Embedder | None:
+    if settings.kind == "none":
+        return None
+    if settings.kind == "dinov2":
+        from .embedder_dinov2 import DinoV2Embedder
+        return DinoV2Embedder(settings, root)
+    raise ConfigError(f"unknown embedder kind {settings.kind!r}")
 
 
 def build_scene_reader(settings: SceneReaderSettings) -> SceneReader:

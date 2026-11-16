@@ -15,15 +15,17 @@ scripts/
   label.sh               blind labelling UI
 src/sbi/
   settings.py spaces.py  typed, validated config (unknown keys / bad references fail loudly)
-  errors.py              SbiError hierarchy: ConfigError CameraError DetectorError VLMError StorageError
+  errors.py              SbiError hierarchy: ConfigError CameraError DetectorError SegmenterError EmbedderError
+                         VLMError StorageError
   timeutil.py            IST time dimensions; ts_utc is canonical, everything else is local time
   grid.py                box -> grid cell (the VLM never sees the grid)
   ingest/                camera sources (NVR RTSP) and capture (image + frame row)
-  perception/            Detector / Segmenter / SceneReader / FrameSource interfaces, YOLO, SAM 2, LM Studio
-                         reader, normaliser, mask codec
+  perception/            Detector / Segmenter / Embedder / SceneReader / FrameSource interfaces, YOLO, SAM 2,
+                         DINOv2, LM Studio reader, normaliser, mask codec
   store/                 connection, transactions, numbered migrations, data-access modules
   pipeline.py            Engine 1: frame -> observations, scene state, events (one atomic transaction)
   baseline.py            per (space, weekday, hour) averages, always with n
+  embedding.py           catch-up path: image vectors for frames that have none
   tick.py cli.py         orchestration with per-space failure isolation; `python -m sbi <command>`
   labeling/ eval/        ground-truth labelling, accuracy report, label-free stability report
 tests/                   pytest, fakes only (no camera / GPU / LM Studio needed)
@@ -45,7 +47,9 @@ among discovered object names; `scripts/curate.sh` for scheduled runs), `links` 
 (review or undo links), `table --space ID` (Chronos-ready table + column catalog in `data/exports/`),
 `reprocess --space ID --detector-only` (re-run only the detector; each frame's stored VLM answer is replayed
 unchanged, no VLM call), `stability --space ID --start '2026-11-14 00:00' --end '2026-11-14 05:00'` (how much
-each count wobbles inside a quiet window, in IST; a noise check that needs no labels).
+each count wobbles inside a quiet window, in IST; a noise check that needs no labels), `embed --space ID`
+(store image vectors for frames that have none: history, or frames where the embedder failed),
+`table --space ID --fit-end '2026-11-14 12:00'` (learn the image-vector components from earlier slots only).
 Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
 
 ## Conventions
@@ -72,13 +76,21 @@ Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
   is stored (`detections.mask`, about 130 bytes each), so areas, per-cell coverage and duplicate removal are
   derived in the table (`area.sam2*`, `cellarea.sam2`, `count.sam2*`) and can be re-derived with other rules
   without re-running a model. A segmenter failure never loses a frame: its outline columns are NaN.
+- **Image vectors:** an optional embedder (`embedder.kind: dinov2`; `none` stops new vectors, old ones stay) stores
+  one whole-scene vector per photo (`frame_embeddings`, float16, 3 KB). It needs no detector and no VLM, so it
+  describes changes the object counts miss. The table derives `emb.<model>.pc1..pcN` (main directions of scene
+  variation), `drift_prev` (change since the last slot) and `drift_typical` (distance from the typical scene) from
+  the stored vectors, so they can be redefined without re-running a model. The components are learned from the
+  data in the table; for a back-test pass `--fit-end` so the future is kept out of the fit. A model change is a new
+  vector space (`model` is part of the key), so old and new vectors never mix. An embedder failure never loses a
+  frame: its image columns are NaN.
 - **Chronos table:** regular IST grid, NaN for missing slots (never 0, never a dropped row), every dimension kept;
   the catalog says which columns are eligible and why, and a small default set is selected for models.
 
 ## Extending
 
 - **New space:** add `config/spaces/<id>.yaml` (copy an existing one). No code changes; the next tick picks it up.
-- **New detector / segmenter / scene reader / camera source:** implement the Protocol in `perception/types.py`, register its
+- **New detector / segmenter / embedder / scene reader / camera source:** implement the Protocol in `perception/types.py`, register its
   `kind` in `perception/factory.py` and in the settings model, select it in `config/pipeline.yaml`.
 - **New object type:** nothing to do. Unknown labels become `object_registry` rows flagged `auto_new`, and
   `sbi curate` links them to existing names (synonym merge or is_a roll-up).
