@@ -97,6 +97,17 @@ swamped by a series that did not move: parking showed -2.5 from one such series)
 cal.is_holiday / cal.is_working_day (fixed-date national days filled in; the office list is to be pasted in; the
 `holidays` package is optional and was not installed); read-only dashboard on 127.0.0.1:8502.
 
+First human labels (2026-11-16, 18 photos: 7 cabin, 11 parking, spread over weekday/weekend and all parts of day):
+- People: YOLO and VLM both exact on every photo, day and night (0-4 people). Cars: both exact. Keep yolo@0.25.
+- Bikes: yolo@0.25 undercounts more as the area fills (31 true -> 11, 17 -> 7; bias -3.3, MAE 3.45); yolo@0.05 halves
+  the error (MAE 1.82), outline@0.05 has zero mean bias but large per-photo misses. DECISION (user): bike counts stay
+  loose, because the camera angle makes individual bikes barely visible; threshold stays 0.25 and forecasting leans on
+  area.sam2.motorcycle and the bikes/empty probes instead of exact counts.
+- Cabin furniture: too few labels (7 < 10) to set thresholds. Direction: VLM closer on bags, chairs and monitors; YOLO
+  closer on laptops; YOLO overcounts monitors slightly (+0.6) and undercounts bags (-0.6).
+First live forecast scores (2 runs each): skill vs persistence cabin +0.34 (0-1 h) / +0.26 (1-2 h), parking -0.17 /
++0.12; 80% bands covered 86-93%. Too early to judge.
+
 Known issues / not yet done:
 - Subjective VLM fields are unstable (cabin `tidiness` flipped tidy -> messy 30 s apart; `door_state` reported with no door visible). Do not use for alerts until measured.
 - VLM `status` is free text and often useless ("occupied or empty"). Constrain to an enum per object type.
