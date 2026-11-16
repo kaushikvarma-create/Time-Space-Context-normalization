@@ -6,9 +6,10 @@ recomputed for every labelled photo without re-running a model. This sweeps thre
   outline@t  the same boxes after removing same-type boxes whose outlines overlap (count.sam2* in the table)
 and scores each against the human counts (bias, MAE, exact share).
 
-Choosing honestly from ~50 labels: the lowest-MAE option is noisy, so the recommendation is the STRICTEST threshold
-(fewest false positives) whose MAE is within a small margin of the best, and the plain yolo rule wins ties because it
-is what `detector.class_conf` controls. Types with too few labels get no recommendation.
+Choosing honestly from ~50 labels: the lowest-MAE option is noisy. If the current rule (yolo@0.25) is within a small
+margin of the best, it stays: a tie is no evidence for a change. Otherwise the recommendation is the STRICTEST
+threshold (fewest false positives) within that margin, with the plain yolo rule winning ties because it is what
+`detector.class_conf` controls. Types with too few labels get no recommendation.
 """
 from __future__ import annotations
 
@@ -77,6 +78,10 @@ def recommend(scores: pd.DataFrame, *, rel_margin: float = 0.05, abs_margin: flo
                                "why": f"only {n} labels (< {MIN_LABELS})"})
             continue
         ok = g[g["mae"] <= best["mae"] * (1 + rel_margin) + abs_margin].copy()
+        if len(cur) and ((ok["rule"] == "yolo") & (ok["level"] == CURRENT)).any():
+            rows.append(row | {"recommended": f"yolo@{CURRENT:.2f}", "rec_mae": row["current_mae"],
+                               "rec_bias": row["current_bias"], "why": "current threshold is as good as the best: keep"})
+            continue
         ok["simple"] = (ok["rule"] == "yolo").astype(int)
         pick = ok.sort_values(["simple", "level"], ascending=False).iloc[0]
         rows.append(row | {"recommended": f"{pick['rule']}@{pick['level']:.2f}", "rec_mae": float(pick["mae"]),

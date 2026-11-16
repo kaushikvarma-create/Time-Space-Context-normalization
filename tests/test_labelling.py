@@ -106,8 +106,8 @@ def test_recommendation_is_the_strictest_option_close_to_the_best_and_needs_enou
     rec = thresholds.recommend(thresholds.score(thresholds.sweep(conn))).set_index("object_type")
     bike = rec.loc["motorcycle"]
     assert bike["best"] == "yolo@0.10" and bike["recommended"] == "yolo@0.10" and bike["current_mae"] == 1.0
-    assert rec.loc["person", "recommended"] == "yolo@0.50"                           # all zero: strictest wins ties
-    assert thresholds.class_conf_suggestion(rec.reset_index()) == {"motorcycle": 0.10, "person": 0.50}
+    assert rec.loc["person", "recommended"] == "yolo@0.25" and "keep" in rec.loc["person", "why"]   # a tie is no evidence
+    assert thresholds.class_conf_suggestion(rec.reset_index()) == {"motorcycle": 0.10}
     few = thresholds.recommend(thresholds.score(thresholds.sweep(conn).query("frame_id < 3")))
     assert (few["recommended"] == "-").all() and few["why"].str.contains("only").all()
 
@@ -122,4 +122,4 @@ def test_suggestions_skip_outline_picks_the_current_threshold_and_disagreeing_sp
 def test_eval_report_includes_the_threshold_section(conn, parking, root):
     labelled(conn, parking, root, BIKES, {"motorcycle": 4, "person": 0}, n=thresholds.MIN_LABELS)
     text = vlm_eval.report(conn)
-    assert "detector threshold per object type" in text and "class_conf: {motorcycle: 0.10" in text
+    assert "detector threshold per object type" in text and "class_conf: {motorcycle: 0.10}" in text
