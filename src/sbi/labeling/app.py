@@ -3,6 +3,8 @@ You count objects in the photo WITHOUT seeing what the models said (avoids ancho
 model counts are revealed next to yours. Times shown are in the space's local timezone (IST)."""
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 from sbi.errors import SbiError
@@ -16,15 +18,21 @@ st.set_page_config(layout="wide", page_title="Label frames")
 
 @st.cache_resource
 def _init():
-    settings = load_settings()
-    conn = connect(settings.db_path)
-    migrate(conn)
+    """Settings and spaces are shared across runs; the database connection is NOT: Streamlit runs each page run in
+    its own thread and an SQLite connection may only be used by the thread that opened it."""
+    settings = load_settings(os.environ.get("SBI_ROOT"))
+    first = connect(settings.db_path)
+    try:
+        migrate(first)
+    finally:
+        first.close()
     spaces = {s.space_id: s for s in (load_space(f) for f in discover_space_files(settings.root))}
-    return settings, conn, spaces
+    return settings, spaces
 
 
 try:
-    settings, conn, spaces = _init()
+    settings, spaces = _init()
+    conn = connect(settings.db_path)              # one per page run, in this run's thread
 except SbiError as e:
     st.error(f"Setup problem: {e}")
     st.stop()
