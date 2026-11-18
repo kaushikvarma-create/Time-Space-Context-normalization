@@ -226,13 +226,16 @@ def test_capture_grid_gaps_and_stamp(conn, space, root):
     gp = data.gaps(table)
     assert gp["slots"].tolist() == [2, 1] and str(gp.loc[0, "from"]) == "2026-11-12 00:30:00" and str(gp.loc[0, "to"]) == "2026-11-12 00:45:00"
     assert data.gaps(make_table(5)).empty
-    assert data.table_stamp(conn, "admin_cabin") == (0, 0, 0)
+    assert data.table_stamp(conn, "admin_cabin") == (0, 0, 0, "")
     fid = cap(conn, space, root, FakeSource([synthetic_image()]), thursday_ist(9, 0)).frame_id
-    assert data.table_stamp(conn, "admin_cabin") == (fid, 0, 0)                        # captured, not yet read
+    assert data.table_stamp(conn, "admin_cabin") == (fid, 0, 0, "")                    # captured, not yet read
     process_frame(conn, space, fid, FakeDetector(DETS), FakeReader(), root=root)
     rid = insert_run(conn, space_id="admin_cabin", origin_local="2026-11-12T09:00:00", model="m", variant="all", horizon=1,
                      step_minutes=15, context_slots=1, targets=["a"], covariates=[], quantiles=[0.5])
-    assert data.table_stamp(conn, "admin_cabin") == (fid, 1, rid)
+    read_at = conn.execute("SELECT processed_utc FROM frames WHERE frame_id=?", (fid,)).fetchone()[0]
+    assert data.table_stamp(conn, "admin_cabin") == (fid, 1, rid, read_at)
+    conn.execute("UPDATE frames SET processed_utc='2030-01-01T00:00:00+00:00' WHERE frame_id=?", (fid,))
+    assert data.table_stamp(conn, "admin_cabin")[3] == "2030-01-01T00:00:00+00:00"     # a re-read photo changes it too
 
 
 def test_funnel_counts_one_photo_per_slot_through_each_stage(conn, space, root):

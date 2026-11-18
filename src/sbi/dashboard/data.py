@@ -136,13 +136,13 @@ def label(column: str) -> str:
     return column
 
 
-def table_stamp(conn: sqlite3.Connection, space_id: str) -> tuple[int, int, int]:
-    """Changes exactly when the space's table or stored forecasts could change (a new or re-read photo, a new
-    forecast run), so a cached table is rebuilt only then."""
-    f = conn.execute("SELECT COALESCE(MAX(frame_id), 0), COUNT(processed_utc) FROM frames WHERE space_id=?",
-                     (space_id,)).fetchone()
+def table_stamp(conn: sqlite3.Connection, space_id: str) -> tuple[int, int, int, str]:
+    """Changes exactly when the space's table or stored forecasts could change (a new photo, a photo read or
+    re-read, a new forecast run), so a cached table is rebuilt only then."""
+    f = conn.execute("SELECT COALESCE(MAX(frame_id), 0), COUNT(processed_utc), COALESCE(MAX(processed_utc), '') "
+                     "FROM frames WHERE space_id=?", (space_id,)).fetchone()
     r = conn.execute("SELECT COALESCE(MAX(run_id), 0) FROM forecast_runs WHERE space_id=?", (space_id,)).fetchone()
-    return int(f[0]), int(f[1]), int(r[0])
+    return int(f[0]), int(f[1]), int(r[0]), str(f[2])
 
 
 def usual(series: pd.Series, when: pd.DatetimeIndex, *, before: pd.Timestamp | None = None) -> pd.Series:
