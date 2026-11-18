@@ -16,8 +16,8 @@ frame_source:                   # kind: nvr_rtsp
 
 detector:                       # kind: yolo
   kind: yolo
-  weights: models/yolo12x.pt
-  imgsz: 1920
+  weights: models/yolo26x.pt    # chosen by benchmark on 18 Nov 2026 (see PLAN.md): chairs exact in 80% of cabin photos
+  imgsz: 1280                   # vs 31% for yolo12x at 1920. Larger sizes were worse here (1920: 59%), not better
   conf: 0.25                    # counting threshold: boxes at or above it are counted (observations, baselines)
   store_conf: 0.05              # storage floor: every box down to here is kept in `detections`, uncounted
   class_conf: {}                # per-label counting thresholds, e.g. {motorcycle: 0.10}; set these from labels

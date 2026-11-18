@@ -32,8 +32,8 @@ class FrameSourceSettings(_Strict):
 
 class DetectorSettings(_Strict):
     kind: Literal["yolo"] = "yolo"
-    weights: str = "models/yolo12x.pt"
-    imgsz: int = Field(1920, ge=320)
+    weights: str = "models/yolo26x.pt"
+    imgsz: int = Field(1280, ge=320)
     conf: float = Field(0.25, gt=0, lt=1)            # counting threshold: boxes at or above it are counted
     store_conf: float = Field(0.05, gt=0, lt=1)      # storage floor: every box down to here is kept, uncounted
     class_conf: dict[str, float] = {}                # per-label counting threshold overrides (set from labels)

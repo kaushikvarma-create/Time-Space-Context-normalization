@@ -518,3 +518,35 @@ Audit of the live system (13 Nov 09:00 to 18 Nov 08:30 IST, both spaces):
   boxes do not meet or whose sizes differ too much are now skipped; same table, 4.7 s (parking 3.3 s to 1.2 s).
 - Dashboard rewritten (`scripts/dashboard.sh`, http://localhost:8502): now and next 4 hours, forecast vs actual,
   pipeline, all dimensions. It rebuilds a space's table only when a new photo or forecast arrives.
+
+## 2026-11-18: Detector replaced after a benchmark (the steady-count idea was dropped)
+
+The chair count was wrong: the cabin has 7 chairs (7 in every labelled photo) and `count.yolo.chair` ranged 4 to 10.
+A smoothed "steady count" was built and removed the same day: numbers must be measured per photo, not smoothed
+afterwards. Instead, 22 detector settings were benchmarked with `scripts/detector_bench/` on 258 photos (every second
+cabin photo plus the 18 labelled ones). Chairs are scored against 7; the counting threshold is chosen on half the
+photos and reported on the other half (123 photos, 70 of them at night).
+
+| Detector, input size | Chairs exactly 7 | Within 1 | Average miss | People miss (labels) |
+|---|---|---|---|---|
+| YOLO26x, 960 | 85% | 99% | 0.15 | 0.06 |
+| YOLO26x, 1120 | 82% | 98% | 0.20 | 0.00 |
+| **YOLO26x, 1280 (chosen)** | **80%** | **98%** | **0.24** | **0.00** |
+| YOLOE-26x (text prompts), 1280 | 80% | 98% | 0.22 | 0.00 (monitors poor) |
+| YOLO26x, 1920 | 59% | 93% | 0.49 | 0.06 |
+| OWLv2 base | 63% | 85% | 0.55 | 0.94 |
+| YOLO12x, 1920 (was live) | 37% | 88% | 0.76 | 0.06 |
+| YOLO11x, 1920 | 35% | 85% | 0.85 | 0.00 |
+| RT-DETR-x, 1280 | 18% | 58% | 1.52 | 0.44 |
+
+- Smaller input sizes are better for this camera: big nearby objects are found more reliably. 1280 was taken over
+  960 because it missed no labelled person and keeps more detail for small, distant objects.
+- Combining detectors (YOLO26x + YOLOE, with or without OWLv2) reached 81 to 85%: not worth a second or third model.
+- Night-photo brightening (CLAHE) and test-time augmentation did not help. Grounding DINO failed to run here.
+- Live switch: `detector.weights: models/yolo26x.pt`, `imgsz: 1280`; all 972 stored photos re-read with it
+  (`sbi reprocess --detector-only`, VLM answers kept). Backup: `data/backups/sbi-before-yolo26x.db`.
+- On the live data after the switch: chairs exactly 7 in 80% of slots (was 31%), within 1 in 99% (was 83%), changing
+  between consecutive slots 15% of the time (was 46%). Labels: chair miss 0.71 -> 0.14, monitor 1.14 -> 0.71,
+  laptop 0.14 -> 0, bag 0.86 -> 0.57; people and cars still exact; motorcycles 3.45 -> 3.18.
+- Still open: the remaining 20% are mostly one chair missed behind a person or bag. Getting past that needs a
+  detector trained on these two camera views, which needs boxes drawn on photos.
