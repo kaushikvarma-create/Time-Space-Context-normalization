@@ -14,7 +14,7 @@ from collections import defaultdict
 import numpy as np
 
 from ..grid import cell_id
-from ..perception.masks import cell_shares, drop_duplicate_masks
+from ..perception.masks import cell_shares, drop_duplicate_masks, mask_extent
 
 MaskedBox = tuple[str, float, bool, np.ndarray]      # (object type, confidence, counted, outline)
 
@@ -24,13 +24,15 @@ def mask_features(boxes: list[MaskedBox], *, sources: dict[str, float | None], m
                   cell_sources: tuple[str, ...] = ("sam2",)) -> dict[str, float]:
     """`sources` maps a source token to its confidence level; None means 'the counted boxes'."""
     out: dict[str, float] = {}
+    extents = [mask_extent(mask) for _, _, _, mask in boxes]         # measured once, reused by every source
     for src, level in sources.items():
-        by_type: dict[str, list[tuple[float, np.ndarray]]] = defaultdict(list)
-        for name, conf, counted, mask in boxes:
+        by_type: dict[str, list[int]] = defaultdict(list)
+        for i, (name, conf, counted, _) in enumerate(boxes):
             if counted if level is None else conf >= level:
-                by_type[name].append((conf, mask))
-        for name, items in by_type.items():
-            out[f"count.{src}.{name}"] = float(len(drop_duplicate_masks(items, min_iou)))
+                by_type[name].append(i)
+        for name, idx in by_type.items():
+            items = [(boxes[i][1], boxes[i][3]) for i in idx]
+            out[f"count.{src}.{name}"] = float(len(drop_duplicate_masks(items, min_iou, [extents[i] for i in idx])))
             union = np.logical_or.reduce([m for _, m in items])
             out[f"area.{src}.{name}"] = round(float(union.mean()), 5)
             if grid is not None and src in cell_sources:

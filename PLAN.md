@@ -497,3 +497,24 @@ Prompt skeleton (final wording to be tuned in Phase 2):
   | Parking     | 0.350 | 0.349 | 0.346    |
 
   Feeding everything costs nothing and gains nothing yet. Rerun weekly as history grows.
+
+## 2026-11-18: Pipeline audit and the new dashboard
+
+Audit of the live system (13 Nov 09:00 to 18 Nov 08:30 IST, both spaces):
+
+| Check | Result |
+|---|---|
+| Photos captured | 477 of 479 slots per space (99.6%); two single missed slots, no failed captures |
+| Each stage on captured photos | detector, VLM, image vector, description scores 100%; outlines all but one photo per space |
+| Time per 15-minute run | median 21 s, slowest 56 s (last 96 runs) |
+| Numbers per photo | admin cabin 715, parking 612 |
+| Usable series | admin cabin 416, parking 232; the rest appear in under 5% of slots or never change |
+| Given to Chronos-2 | every usable series: cabin 45 forecast + 371 inputs, parking 33 + 199 |
+| Input table | regular 15-minute grid, 0.5% missing values, no empty rows, newest row complete |
+| Does the model use the inputs | yes: shuffling them moves the forecasts (mean change 0.14); it raises no warnings |
+| Does the future calendar matter | hardly (mean change 0.004 when shuffled) |
+
+- Fixed: building the table took 9 s (cabin) because every pair of outlines was compared pixel by pixel. Pairs whose
+  boxes do not meet or whose sizes differ too much are now skipped; same table, 4.7 s (parking 3.3 s to 1.2 s).
+- Dashboard rewritten (`scripts/dashboard.sh`, http://localhost:8502): now and next 4 hours, forecast vs actual,
+  pipeline, all dimensions. It rebuilds a space's table only when a new photo or forecast arrives.
