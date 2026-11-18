@@ -98,7 +98,11 @@ def test_the_dashboard_app_runs_end_to_end(root, space_dir, monkeypatch):
     monkeypatch.setenv("SBI_ROOT", str(root))
     at = AppTest.from_file(str(REPO / "src" / "sbi" / "dashboard" / "app.py"), default_timeout=120).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert [t.label for t in at.tabs] == ["Now and next 4 hours", "Forecast vs actual", "Pipeline", "All dimensions"]
+    assert [t.label for t in at.tabs] == ["Now and next 4 hours", "Forecast vs actual", "Pipeline", "All dimensions", "Guide"]
+    page_text = " ".join(m.value for m in at.markdown)
+    assert "Space Behaviour Intelligence" in page_text and "Admin cabin</b>" in page_text       # the header band
+    assert "no photos yet" in page_text                                                         # parking has none
+    assert "# Dashboard guide" in page_text and "Families of dimensions" in page_text           # the guide tab
     tiles = " ".join(m.value for m in at.markdown)
     assert "people (detector)" in tiles and "Given to Chronos-2" in tiles and "12 / 12" in tiles
     assert tiles.index("Photos captured") < tiles.index("12 / 12") < tiles.index("Numbers per photo")
@@ -135,7 +139,26 @@ def _forecast(table, target, values, step0=1):
                          "q10": [v - 1 for v in values], "q50": values, "q90": [v + 1 for v in values]})
 
 
+def test_header_status_says_whether_each_space_is_live(conn, space, parking, root):
+    fid = cap(conn, space, root, FakeSource([synthetic_image()]), thursday_ist(11, 0)).frame_id
+    process_frame(conn, space, fid, FakeDetector(DETS), FakeReader(), root=root)
+    cap(conn, space, root, FakeSource([synthetic_image(1)]), thursday_ist(11, 15))                # captured, not read
+    insert_run(conn, space_id="admin_cabin", origin_local="2026-11-12T11:00:00", model="m", variant="all", horizon=1,
+               step_minutes=15, context_slots=1, targets=["a"], covariates=[], quantiles=[0.5])
+    people = conn.execute("SELECT people_yolo FROM scene_state WHERE frame_id=?", (fid,)).fetchone()[0]
+    at = lambda minutes: {s["space_id"]: s for s in data.header_status(conn, [space, parking], thursday_ist(11, 0) + timedelta(minutes=minutes))}
+    cab = at(10)["admin_cabin"]
+    assert (cab["photo"], cab["age_min"], cab["state"], cab["forecast"]) == ("11:00", 10, "live", "11:00")   # the read photo
+    assert cab["people"] == people and cab["vehicles"] is None                                    # vehicles: parking only
+    assert at(20)["admin_cabin"]["state"] == "live" and at(21)["admin_cabin"]["state"] == "late"
+    assert at(60)["admin_cabin"]["state"] == "late" and at(61)["admin_cabin"]["state"] == "stopped"
+    park = at(10)["parking"]
+    assert (park["state"], park["photo"], park["forecast"], park["name"]) == ("no photos", None, None, "Parking area")
+
+
 def test_labels_read_like_words():
+    assert data.label("count.yolo_c05.chair") == "chair count (detector, confidence 0.05+)"
+    assert data.label("area.sam2_c10.person") == "person area share (outline, confidence 0.10+)"
     assert data.label("scene.people_yolo") == "people (detector)" and data.label("scene.count_disagree") == "count disagree"
     assert data.label("count.vlm.motorcycle") == "motorcycle count (VLM)"
     assert data.label("area.sam2.chair") == "chair area share (outline)"

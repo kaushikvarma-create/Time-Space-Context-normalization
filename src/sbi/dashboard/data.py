@@ -105,10 +105,17 @@ KIND_NAMES = {"scene": "Scene totals", "count": "Counts per object type", "rollu
               "emb": "Image vector", "probe": "Scene description scores", "cal": "Calendar", "feat": "Other features"}
 
 
+def _source(token: str) -> str:
+    """'yolo' -> 'detector'; 'yolo_c05' -> 'detector, confidence 0.05+' (every stored box at or above that level)."""
+    base, _, level = token.partition("_c")
+    name = SOURCE_NAMES.get(base, base)
+    return f"{name}, confidence 0.{level}+" if level.isdigit() else SOURCE_NAMES.get(token, token)
+
+
 def label(column: str) -> str:
     """A readable name for a table column: 'count.yolo.chair' -> 'chair count (detector)'."""
     parts = column.split(".")
-    kind, src = parts[0], SOURCE_NAMES.get(parts[1], parts[1]) if len(parts) > 1 else ""
+    kind, src = parts[0], _source(parts[1]) if len(parts) > 1 else ""
     if kind == "scene":
         name, _, source = parts[1].rpartition("_")
         return f"{name} ({SOURCE_NAMES[source]})" if source in SOURCE_NAMES and name else parts[1].replace("_", " ")
@@ -310,7 +317,32 @@ def dimensions(table: pd.DataFrame, catalog: pd.DataFrame, run: dict | None, for
         rows.append({"dimension": label(r.column), "column": r.column, "family": r.kind,
                      "now": float(last[r.column]) if numeric and pd.notna(last.get(r.column)) else None,
                      "now (text)": None if numeric or pd.isna(last.get(r.column)) else str(last[r.column]),
-                     "usual now": float(usual(s, pd.DatetimeIndex([table.index[-1]])).iloc[0]) if len(s) else None,
+                     "usual now": float(usual(s, pd.DatetimeIndex([table.index[-1]]), before=table.index[-1]).iloc[0]) if len(s) else None,
                      "min": float(s.min()) if len(s) else None, "max": float(s.max()) if len(s) else None,
                      "+1 h forecast": next_hour.get(r.column), "coverage": r.coverage, "use": use})
     return pd.DataFrame(rows)
+
+
+def header_status(conn: sqlite3.Connection, spaces: list[SpaceConfig], now_utc: datetime) -> list[dict]:
+    """One entry per space for the page header: the latest photo that has been read (local time and age in minutes),
+    what the detector counted in it, when the latest forecast was made, and a state word:
+    'live' (photo at most 20 minutes old), 'late' (at most an hour), 'stopped' (older) or 'no photos'."""
+    out = []
+    for s in spaces:
+        r = conn.execute(
+            "SELECT f.ts_utc, c.people_yolo, c.vehicles_yolo FROM frames f LEFT JOIN scene_state c USING(frame_id) "
+            "WHERE f.space_id=? AND f.capture_status='ok' AND f.processed_utc IS NOT NULL ORDER BY f.ts_utc DESC LIMIT 1",
+            (s.space_id,)).fetchone()
+        fc = conn.execute("SELECT origin_local FROM forecast_runs WHERE space_id=? ORDER BY run_id DESC LIMIT 1",
+                          (s.space_id,)).fetchone()
+        entry = {"space_id": s.space_id, "name": s.name, "photo": None, "age_min": None, "people": None, "vehicles": None,
+                 "forecast": fc["origin_local"][11:16] if fc else None, "state": "no photos"}
+        if r is not None:
+            taken = pd.Timestamp(r["ts_utc"])
+            age = (pd.Timestamp(now_utc) - taken).total_seconds() / 60
+            entry.update(photo=taken.tz_convert(get_zone(s.tz)).strftime("%H:%M"), age_min=int(max(age, 0)),
+                         people=None if r["people_yolo"] is None else int(r["people_yolo"]),
+                         vehicles=None if r["vehicles_yolo"] is None or s.space_type != "parking" else int(r["vehicles_yolo"]),
+                         state="live" if age <= 20 else "late" if age <= 60 else "stopped")
+        out.append(entry)
+    return out

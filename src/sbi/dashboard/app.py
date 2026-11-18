@@ -1,6 +1,6 @@
 """Space Behaviour Intelligence dashboard (read-only).   Run:  scripts/dashboard.sh  (http://localhost:8502)
 
-Four tabs: what each space looks like now and in the next hours; how past forecasts compared with what happened;
+A header and five tabs: what each space looks like now and in the next hours; how past forecasts compared with what happened;
 whether every photo gets through every stage and how much of it reaches the forecasting model; every extracted
 dimension with its latest value. All times are IST. The project root is the current directory, or SBI_ROOT if set.
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -32,7 +33,7 @@ HOURS = {"24 h": 24, "48 h": 48, "7 days": 168}
 LEADS = {"1 h ahead": 4, "2 h ahead": 8, "4 h ahead": 16}
 
 st.set_page_config(layout="wide", page_title="SBI", initial_sidebar_state="collapsed")
-st.markdown("<style>.block-container{padding-top:2.2rem;padding-bottom:2rem} [data-testid='stMetricValue']"
+st.markdown("<style>.block-container{padding-top:1.4rem;padding-bottom:2rem} [data-testid='stMetricValue']"
             "{font-variant-numeric:tabular-nums}</style>", unsafe_allow_html=True)
 
 
@@ -92,6 +93,38 @@ def tile(where, label_: str, value: str, note: str | None = None, color: str = S
         f"<div style='font-size:0.85rem;color:#52514e'>{label_}</div>"
         f"<div style='font-size:2rem;line-height:1.25;font-variant-numeric:tabular-nums'>{value}</div>"
         f"<div style='font-size:0.8rem;color:#52514e;min-height:1.1rem'>{note or ''}</div></div>", unsafe_allow_html=True)
+
+
+STATE_DOT = {"live": "#35c46a", "late": "#f0b429", "stopped": "#ef6461", "no photos": "#8d99a6"}
+
+
+def header(statuses: list[dict], clock: datetime) -> str:
+    """The band at the top: what this is, the time, and one line per space saying whether it is live and what
+    the latest photo showed."""
+    def plural(n: int, word: str) -> str:
+        return f"{n} {word}" if n == 1 else f"{n} {'people' if word == 'person' else word + 's'}"
+    cells = []
+    for s in statuses:
+        if s["photo"] is None:
+            detail = "no photos yet"
+        else:
+            seen = [plural(s["vehicles"], "vehicle")] if s["vehicles"] is not None else []
+            seen += [plural(s["people"], "person")] if s["people"] is not None else []
+            detail = (f"photo {s['photo']} ({s['age_min']} min ago)" + (f" &middot; {', '.join(seen)}" if seen else "")
+                      + (f" &middot; forecast {s['forecast']}" if s["forecast"] else ""))
+        cells.append(
+            f"<div style='margin-right:2.5rem'><span style='display:inline-block;width:9px;height:9px;border-radius:50%;"
+            f"background:{STATE_DOT[s['state']]};margin-right:0.45rem'></span><b>{s['name']}</b>"
+            f"<span style='color:#aab4c0'> &nbsp;{s['state']}</span>"
+            f"<div style='color:#d5dbe2;font-size:0.85rem;margin:0.1rem 0 0 1.05rem'>{detail}</div></div>")
+    return ("<div style='background:#1d2733;color:#fff;border-radius:6px;padding:0.9rem 1.25rem 0.95rem;margin-bottom:0.6rem'>"
+            "<div style='display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #34414f;"
+            "padding-bottom:0.55rem;margin-bottom:0.65rem'>"
+            "<div><span style='font-size:1.3rem;font-weight:600;letter-spacing:0.01em'>Space Behaviour Intelligence</span>"
+            "<span style='color:#aab4c0;margin-left:0.9rem;font-size:0.9rem'>a photo every 15 minutes, read into numbers, "
+            "forecast 4 hours ahead</span></div>"
+            f"<div style='color:#d5dbe2;font-variant-numeric:tabular-nums'>{clock:%a %d %b %Y, %H:%M} IST</div></div>"
+            f"<div style='display:flex;flex-wrap:wrap'>{''.join(cells)}</div></div>")
 
 
 def state_colour(share: float) -> str:
@@ -169,11 +202,12 @@ except (SbiError, OSError) as e:
     st.stop()
 
 
-# A link can open a given space and tab:  ?space=parking&tab=pipeline   (tab: now | accuracy | pipeline | all)
-TABS = ["Now and next 4 hours", "Forecast vs actual", "Pipeline", "All dimensions"]
+# A link can open a given space and tab:  ?space=parking&tab=pipeline   (tab: now | accuracy | pipeline | all | guide)
+TABS = ["Now and next 4 hours", "Forecast vs actual", "Pipeline", "All dimensions", "Guide"]
+GUIDE = Path(__file__).resolve().parents[3] / "docs" / "dashboard-guide.md"
 _q = st.query_params
 first_space = list(spaces).index(_q["space"]) if _q.get("space") in spaces else 0
-first_tab = {"now": 0, "accuracy": 1, "pipeline": 2, "all": 3}.get(_q.get("tab", "now"), 0)
+first_tab = {"now": 0, "accuracy": 1, "pipeline": 2, "all": 3, "guide": 4}.get(_q.get("tab", "now"), 0)
 
 
 @st.fragment(run_every=60)
@@ -188,6 +222,9 @@ def page() -> None:
 
 
 def _page(conn) -> None:
+    clock = datetime.now(timezone.utc)
+    local = clock.astimezone(table_tz(next(iter(spaces.values()))))
+    st.markdown(header(data.header_status(conn, list(spaces.values()), clock), local), unsafe_allow_html=True)
     top = st.columns([3, 2])
     space_id = top[0].radio("Space", list(spaces), index=first_space, horizontal=True, label_visibility="collapsed",
                             format_func=lambda s: spaces[s].name)
@@ -203,11 +240,12 @@ def _page(conn) -> None:
         return
     run, forecast = data.latest_forecast(conn, space_id)
     now = table.index.max()
-    top[1].markdown(f"<div style='text-align:right;color:#52514e'>latest photo <b>{now:%a %d %b %H:%M}</b> IST"
-                    + (f" &nbsp;|&nbsp; forecast made <b>{run['origin_local'][11:16]}</b>" if run else "")
-                    + f" &nbsp;|&nbsp; page checked {datetime.now(timezone.utc).astimezone(table_tz(space)):%H:%M:%S}</div>",
+    top[1].markdown(f"<div style='text-align:right;color:#52514e;font-size:0.85rem'>showing <b>{space.name}</b> up to "
+                    f"{now:%a %d %b %H:%M} &nbsp;|&nbsp; refreshes every minute, last at {local:%H:%M:%S}</div>",
                     unsafe_allow_html=True)
-    t_now, t_acc, t_pipe, t_all = st.tabs(TABS, default=TABS[first_tab])
+    t_now, t_acc, t_pipe, t_all, t_guide = st.tabs(TABS, default=TABS[first_tab])
+    with t_guide:
+        st.markdown(GUIDE.read_text() if GUIDE.exists() else "The guide file `docs/dashboard-guide.md` is missing.")
 
     targets = run["targets"] if run else []
     with t_now:
