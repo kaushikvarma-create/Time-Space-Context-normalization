@@ -40,6 +40,17 @@ def make(name):
         w, _, opt = name.partition("@"); size, *flags = opt.split("+")
         path = ROOT / "models" / f"{w}.pt"
         m = YOLO(str(path))
+        if "tile" in flags:        # the whole photo plus overlapping left/right halves, each at full input size
+            def tiled(img, br, space):
+                h, w = img.shape[:2]; out = ultra(m, img, int(size))
+                for x0, x1 in ((0, int(w * 0.6)), (int(w * 0.4), w)):
+                    for name, conf, (a, b, c, d) in ultra(m, img[:, x0:x1], int(size)):
+                        tw = x1 - x0
+                        if (x0 > 0 and a * tw < 8) or (x1 < w and c * tw > tw - 8):      # cut by the tile edge: the other view has it whole
+                            continue
+                        out.append((name, conf, [round((x0 + a * tw) / w, 4), b, round((x0 + c * tw) / w, 4), d]))
+                return out
+            return tiled
         return lambda img, br, space: ultra(m, clahe(img, br) if "clahe" in flags else img, int(size), augment="tta" in flags)
     if name.startswith("rtdetr"):
         from ultralytics import RTDETR
