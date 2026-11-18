@@ -13,7 +13,7 @@ photo every 15 min
    -> two frames: the past (context) and the next 4 hours (future)            [forecast/table.py: to_chronos]
    -> Chronos-2 predict_df(context, future)                                   [forecast/models.py]
    -> 3 numbers per series per future slot (low, middle, high)
-   -> counts clipped at 0, stored in forecast_runs / forecasts                [forecast/runner.py]
+   -> non-negative kinds clipped at 0, stored in forecast_runs / forecasts                [forecast/runner.py]
 ```
 
 It runs every hour on the hour, inside the 15-minute scheduled run, right after the newest photo has been read
@@ -28,7 +28,7 @@ It runs every hour on the hour, inside the 15-minute scheduled run, right after 
 | Columns in the past frame | 457 | 230 |
 | Rows in the future frame | 16 (4 hours) | 16 |
 | Missing values in the past frame | 0.36% | 0.34% |
-| Time to build the table | 5.2 s | 1.8 s |
+| Time to build the table | 5.2 s (0.6 s since the per-photo cache) | 1.8 s (0.6 s) |
 | Time for Chronos-2 to forecast | 0.29 s | 0.09 s |
 
 ## Step 1: the table
@@ -43,7 +43,8 @@ One table per space [forecast/build.py: table_for -> forecast/table.py: build_ta
   598. The families (counts, areas, grid cells, relations, image statistics, image vector, description scores,
   scene fields, calendar) are listed in `docs/dashboard-guide.md`.
 - **Catalog:** for every column the table records whether it is usable ("model-ready"): values in at least half the
-  slots, at least 8 values, not constant, and for counts seen in at least 3 slots and 5% of slots. Admin cabin 416
+  slots, at least 8 values, not constant, not a building part (wall, floor, ceiling, pillar, roof), and for count-like
+  families (count, rollup, cell, rel, area, cellarea) seen in at least 3 slots and 5% of slots. Admin cabin 416
   usable, parking 232.
 
 ## Step 2: what to forecast (targets)
@@ -188,11 +189,11 @@ cabin, 31 x 16 = 496 for parking.
 | 18 Nov 11:15 | scene.people_yolo | 3 | 1.62 | 2.97 | 4.31 |
 
 - **q50** is the middle estimate. **q10 to q90** is the range given an 80% chance of containing the true value.
-- **One rule is applied afterwards** [inputs.py: predict]: counts, areas and image statistics cannot be negative,
-  so their three values are clipped at 0. Description scores and image-vector values can be negative and are left
+- **One rule is applied afterwards** [inputs.py: predict]: series of the kinds scene, count, rollup, area, cell,
+  cellarea, rel and img cannot be negative, so their three values are clipped at 0. Description scores and image-vector values can be negative and are left
   alone. Nothing else is changed.
 - **Stored** [runner.py, store/forecasts.py]: one row in `forecast_runs` (space, time made, start time, model,
-  input set, horizon, number of history rows, target names, input names, levels) and one row per value in
+  input set, horizon, number of history rows, target names, past-only input names plus the markers `cal.*` and `prof.*` when calendar and profiles were given, levels) and one row per value in
   `forecasts`. So every forecast can be traced to exactly what the model was given.
 - **Used by:** the dashboard (charts, tables), `sbi accuracy` (scores each stored forecast once its time has
   passed), and the "Forecast vs actual" tab.
@@ -223,9 +224,10 @@ cabin, 31 x 16 = 496 for parking.
    are what fix this. First real tests: Sat 21 Nov and Mon 23 Nov.
 2. **Some inputs repeat each other.** For example `count.yolo.person` is the same series as `scene.people_yolo`,
    and about 30 input columns have a near-identical twin. Harmless, but they add nothing.
-3. **Table build time grows with history** (about 1 second per 100 slots for the cabin). At 85 days that would be
-   over a minute per forecast. See "Open improvements" in `docs/repo-map.md`.
-4. **Past 85 days** the history exceeds what Chronos-2 can read in one call; older rows are then ignored by it.
+3. **Table build time:** each photo's derived columns are cached (`data/cache/table_features.db`), so a rebuild takes
+   about 0.6 s; only new or re-read photos are derived again. A vocabulary or setting change derives all again once.
+4. **History cap:** live forecasts and the dashboard use the newest `forecast.max_context` slots (8192, about 85
+   days), the most Chronos-2 can read in one call.
 5. **Each space is forecast on its own.** Parking is not shown the cabin's series, or the other way round.
 6. **Horizon is 4 hours.** `forecast.horizon` can be raised; accuracy further out has not been measured.
 

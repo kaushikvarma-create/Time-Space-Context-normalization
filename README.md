@@ -1,159 +1,139 @@
 # Space Behaviour Intelligence (SBI)
 
-Camera stills every 15 min -> five models read each photo into numbers (YOLO boxes, SAM 2 outlines, a vision LLM,
-a DINOv2 image vector, SigLIP 2 description scores) -> SQLite -> one table per space -> Chronos-2 forecasts the next
-4 hours, every hour. A read-only dashboard shows the numbers, the forecasts and how accurate they were.
+SBI turns two security cameras into time series and forecasts them.
 
-- `PLAN.md`: scope, decisions, benchmarks and known issues, in date order.
-- `docs/chronos-data-flow.md`: exactly what is given to Chronos-2 and what comes back.
-- `docs/dashboard-guide.md`: what every part of the dashboard means.
-- `docs/repo-map.md`: map of the code and the sweep of 18 Nov 2026 (what was checked, what is open).
+Every 15 minutes it takes one still from each camera (an admin cabin and a parking area). Five models read each
+photo into numbers: YOLO26x boxes, SAM 2 outlines, a vision-language model, a DINOv2 image vector and SigLIP 2
+description scores. Everything is stored in SQLite. Each space gets one table, with a row every 15 minutes and about
+600 to 750 columns. Once an hour Chronos-2 reads that table and forecasts the next 4 hours. A read-only dashboard
+shows the numbers, the forecasts and how accurate past forecasts were.
+
+| Document | What it covers |
+|---|---|
+| `docs/technical-deep-dive.md` | every module, setting, table, rule and test, in detail |
+| `docs/chronos-data-flow.md` | exactly what is given to Chronos-2 and what comes back |
+| `docs/dashboard-guide.md` | what every part of the dashboard means (also the dashboard's Guide tab) |
+| `docs/repo-map.md` | mind map of the code, the 18 Nov 2026 sweep, open improvements |
+| `docs/research/2026-11-13-photo-to-numbers.md` | research behind the photo-to-numbers design |
+| `PLAN.md` | decisions, benchmarks and results in date order |
+
+## What runs on its own
+
+| What | How | When |
+|---|---|---|
+| Capture and read both cameras, update baselines | cron runs `scripts/tick.sh` | every 15 minutes |
+| Chronos-2 forecast per space, stored with its inputs | inside the same run | on the hour (`forecast.every_minutes: 60`) |
+| Dashboard at http://localhost:8502 | systemd user service `sbi-dashboard` | always; restarts itself, starts at boot |
+| Keep WSL (and so cron) running after a Windows restart | Windows scheduled task `SBI-WSL-Keepalive` | at Windows logon |
+
+Every stage is isolated. If one model fails, that failure is logged and its columns are left empty for that photo.
+The rest of the photo is still stored, and the other space is unaffected. All times shown to people are IST.
+
+## Quick start
+
+Python 3.10 or newer, an NVIDIA GPU (the models also run on CPU, slowly), and an OpenAI-compatible vision endpoint
+(LM Studio) for the scene reader. Model weights go in `models/`, which is not in git: `yolo26x.pt`, `sam2.1_l.pt`.
+The Hugging Face models (DINOv2, SigLIP 2, Chronos-2) download on first use.
+
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -e '.[detector,vision,forecast,ui,dev]'
+cp .env.example .env            # fill in SBI_NVR_HOST/PORT/USER/PASS and the LM Studio URL; keep it chmod 600
+PYTHONPATH=src .venv/bin/python -m sbi migrate
+PYTHONPATH=src .venv/bin/python -m sbi tick                # one run by hand
+.venv/bin/python -m pytest -q -p no:warnings                # tests: fakes only, no camera/GPU/LM Studio needed
+```
+
+To make it run on its own, follow these three steps:
+
+```bash
+(crontab -l; echo "*/15 * * * * $PWD/scripts/tick.sh") | crontab -
+scripts/install-dashboard-service.sh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w scripts/windows/install-autostart.ps1)" -Distro "$WSL_DISTRO_NAME"
+```
+
+## Commands
+
+All commands run as `PYTHONPATH=src .venv/bin/python -m sbi <command>` from the project root.
+
+| Command | What it does |
+|---|---|
+| `tick` | capture and read every space, update baselines, forecast when due (what cron runs) |
+| `migrate` | apply pending database migrations |
+| `reprocess --space ID [--frame-id N] [--detector-only] [--no-vlm]` | read stored photos again after a model or setting change; results are replaced, not duplicated. `--detector-only` keeps each photo's stored VLM answer |
+| `embed --space ID` / `score --space ID` | add image vectors / description scores to photos that lack them (history, or a newly added prompt) |
+| `table --space ID [--fit-end T]` | write the table and its column catalog to `data/exports/` |
+| `forecast --space ID [--variant V] [--model M]` | forecast now and store the run |
+| `backtest --space ID [--variants ...] [--models ...]` | replay forecasts from past moments and score them |
+| `accuracy --space ID [--since DATE]` | score stored forecasts against what was later measured |
+| `eval` | compare model counts with human labels, and suggest per-type thresholds |
+| `stability --space ID --start T --end T` | how much each count wobbles in a quiet window (no labels needed) |
+| `baseline [--space ID]` | rebuild weekday-by-hour averages |
+| `curate`, `links`, `link-set ID approved\|rejected` | link synonyms and object groups, review or undo links |
+
+Exit codes: 0 ok, 1 a space failed, 2 fatal configuration error.
+
+| Script | Use |
+|---|---|
+| `scripts/label.sh` | labelling tool at http://localhost:8501: count objects in photos to measure accuracy |
+| `scripts/dashboard.sh` | run the dashboard in the foreground (the service uses this) |
+| `scripts/detector_bench/bench.py`, `score.py` | benchmark any detector setting on the stored photos and score it against labels |
 
 ## Layout
 
 ```
 config/
-  pipeline.yaml          global settings (timezone, detector, scene reader, paths). No secrets.
-  spaces/*.yaml          one file per space: camera channel, grid, vocabulary, aliases, scene fields
-scripts/
-  tick.sh                what cron runs (flock, timeout, IST log, rotation)
-  dashboard.sh           the dashboard (http://localhost:8502)
-  label.sh               blind labelling UI
-  curate.sh              scheduled vocabulary clean-up
-  detector_bench/        run any detector over the benchmark photos and score it against labels
-  windows/               keep WSL running after a Windows restart
+  pipeline.yaml            global settings: paths, every model, table, forecast, calendar. No secrets.
+  spaces/*.yaml            one file per camera: channel, grid, vocabulary, aliases, detector map, probes, targets
+  site_calendar.yaml       office holidays and closures (fill this in)
+scripts/                   tick.sh, dashboard.sh, label.sh, curate.sh, detector_bench/, systemd/, windows/
 src/sbi/
-  settings.py spaces.py  typed, validated config (unknown keys / bad references fail loudly)
-  errors.py              SbiError hierarchy: ConfigError CameraError DetectorError SegmenterError EmbedderError
-                         ScorerError ForecastError VLMError StorageError
-  timeutil.py            IST time dimensions; ts_utc is canonical, everything else is local time
-  grid.py                box -> grid cell (the VLM never sees the grid)
-  ingest/                camera sources (NVR RTSP) and capture (image + frame row)
-  perception/            Detector / Segmenter / Embedder / Scorer / SceneReader / FrameSource interfaces, YOLO,
-                         SAM 2, DINOv2, SigLIP 2, LM Studio reader, normaliser, mask codec
-  store/                 connection, transactions, numbered migrations, data-access modules
-  pipeline.py            Engine 1: frame -> observations, scene state, events (one atomic transaction)
-  baseline.py            per (space, weekday, hour) averages, always with n
-  sitecal.py             known-in-advance day types: site holiday file (+ optional `holidays` package)
-  dashboard/             read-only Streamlit dashboard (scripts/dashboard.sh)
-  forecast/              table builder; Forecaster interface (Chronos-2, baselines); target/covariate choice;
-                         day-type profiles; leak-free backtest; metrics; live runner; live accuracy
-  embedding.py scoring.py  catch-up paths: image vectors / probe scores for frames that lack them
-  imageio.py             read a stored frame's image
-  tick.py cli.py         orchestration with per-space failure isolation; `python -m sbi <command>`
-  labeling/ eval/        ground-truth labelling, accuracy report, label-free stability report
-tests/                   pytest, fakes only (no camera / GPU / LM Studio needed)
+  settings.py spaces.py    typed, validated configuration (unknown keys fail loudly)
+  errors.py                SbiError hierarchy; every expected failure is one of these
+  ingest/                  camera sources (NVR RTSP) and capture (image file + frame row)
+  perception/              model interfaces and implementations: YOLO, SAM 2, DINOv2, SigLIP 2, LM Studio VLM;
+                           box and outline de-duplication; mask codec; label normaliser
+  pipeline.py              one photo -> every stored result, in one transaction
+  store/                   SQLite connection, transactions, numbered migrations, data access
+  taxonomy.py curation/    object names: synonyms and is-a groups; raw labels kept forever
+  baseline.py              weekday-by-hour averages
+  forecast/                table builder and its per-photo cache; target and input choice; day-type profiles;
+                           Chronos-2 and baselines; backtest; live runs; live accuracy
+  sitecal.py               holidays and working days (site file, optional `holidays` package)
+  dashboard/               read-only Streamlit dashboard (data layer + page)
+  labeling/ eval/          human labelling tool; accuracy, threshold and stability reports
+  tick.py cli.py           the scheduled run and the command line
+tests/                     pytest; fakes only
+data/                      not in git: sbi.db, images/, logs/, cache/, exports/, backups/
+models/                    not in git: detector and outline weights
 ```
 
-## Running v1.0
+## Rules the code follows
 
-What runs on its own (cron, every 15 minutes, `scripts/tick.sh` with the project `.venv` interpreter):
-capture both cameras -> YOLO boxes + SAM 2 outlines + Qwen scene reading + DINOv2 image vector + SigLIP 2 probes ->
-SQLite -> baselines; and every `forecast.every_minutes` (60) a Chronos-2 forecast per space, stored with its inputs.
-Every stage is isolated: a failing model is logged and skipped, capture carries on.
-
-What you look at:
-- `scripts/dashboard.sh` -> http://localhost:8502 (this machine only, read-only): now and the next 4 hours,
-  forecast vs actual (also by day of week), the pipeline (what is extracted and what reaches the model), every
-  dimension, and a guide. See `docs/dashboard-guide.md`.
-- `PYTHONPATH=src python3 -m sbi accuracy --space parking`: stored forecasts scored against what then happened.
-- `PYTHONPATH=src python3 -m sbi backtest --space parking`: simulated forecasts from past moments (rerun weekly).
-- `data/logs/tick.log`: everything the tick did, in IST.
-
-Labelling (`scripts/label.sh`, http://localhost:8501): photos come evenly from weekday/weekend x night, morning,
-afternoon, evening; dense areas can be counted in four full-resolution quarter tabs. Then `sbi eval` compares your
-counts with YOLO at every confidence threshold (with and without outline de-duplication) and with the VLM, and
-suggests `detector.class_conf` per object type (the strictest threshold within a small margin of the best).
-
-What you maintain: `config/site_calendar.yaml` (paste the office holiday list), `forecast_targets` and `probes` in
-the space files, and ~50 labelled photos per camera (`scripts/label.sh`) to measure accuracy against truth.
-
-## Run
-
-```bash
-cp .env.example .env            # fill in SBI_NVR_* (gitignored, chmod 600)
-PYTHONPATH=src python3 -m sbi tick        # one tick (cron does this every 15 min via scripts/tick.sh)
-PYTHONPATH=src python3 -m sbi eval        # accuracy vs human labels
-scripts/label.sh                          # label frames (blind), then look at the eval
-.venv/bin/python -m pytest                # tests
-```
-
-Other commands: `migrate`, `baseline [--space ID]`, `reprocess --space ID [--frame-id N]` (re-extract stored
-frames after a prompt/model change; results are replaced, not duplicated), `curate` (link synonyms and hierarchy
-among discovered object names; `scripts/curate.sh` for scheduled runs), `links` / `link-set ID approved|rejected`
-(review or undo links), `table --space ID` (Chronos-ready table + column catalog in `data/exports/`),
-`reprocess --space ID --detector-only` (re-run only the detector; each frame's stored VLM answer is replayed
-unchanged, no VLM call), `stability --space ID --start '2026-11-14 00:00' --end '2026-11-14 05:00'` (how much
-each count wobbles inside a quiet window, in IST; a noise check that needs no labels), `embed --space ID`
-(store image vectors for frames that have none: history, or frames where the embedder failed),
-`accuracy --space ID [--since DATE]` (score stored forecasts against what happened, vs persistence),
-`forecast --space ID [--variant V] [--model chronos2|seasonal_mean|...]` (forecast with Chronos-2 and store the run and
-its quantiles in `forecast_runs` / `forecasts`), `backtest --space ID` (forecast from many past moments, score against
-what happened, compare models and covariate sets), `score --space ID` (score stored photos against the space's probe prompts: history, or a prompt you just added),
-`table --space ID --fit-end '2026-11-14 12:00'` (learn the image-vector components from earlier slots only).
-Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
-
-## Conventions
-
-- **Times:** IST everywhere a human sees them (logs, filenames, UI). `ts_utc` is stored as the canonical instant.
-- **Errors:** library code raises typed `SbiError`s and never calls `sys.exit`. Catch the specific subclass you can
-  handle; unexpected exceptions are bugs and are logged with a traceback at the tick boundary only.
-- **Missing is not zero:** camera down / VLM failure are stored as NULL / `camera_down`, never as a count of 0.
-- **Writes:** every multi-row write goes through `store.db.transaction()` (rollback on any exception). Slow work
-  (detector, VLM) happens before the transaction opens.
-- **Schema:** change it only via a new `store/migrations/NNN_name.sql` (idempotent, applied atomically).
-- **Secrets:** only in `.env` / environment. Credentials are `SecretStr` and masked in logs and errors.
-- **Paths in the DB** are relative to the project root.
-- **Never give the VLM a list of object names** (it reports listed things that are not there; see
-  `docs/research/2026-11-13-photo-to-numbers.md`). Prompts are open-vocabulary; naming is cleaned up afterwards by
-  the taxonomy (`same` / `is_a` links, raw labels kept forever, history re-mapped on any change).
-- **Detector:** YOLO26x at input size 1280, chosen by benchmark (`scripts/detector_bench/`, results in `PLAN.md`).
-  Weights go in `models/` (not in git): `yolo26x.pt`, `sam2.1_l.pt`. After changing the detector, run
-  `sbi reprocess --space ID --detector-only` so history is read by one detector; forecasts made before that are no
-  longer scored.
-- **Detector thresholds:** the detector stores every box down to `detector.store_conf` (0.05) in `detections`,
-  with its confidence. Only boxes at or above the counting threshold (`detector.conf`, or a per-label
-  `detector.class_conf`) become observations, links and totals. The table also counts at each
-  `table.conf_levels` level (`count.yolo_c05.<type>`); those variants are never default model inputs. Pick
-  per-label thresholds from human labels (`sbi eval`), not by eye; `sbi stability` shows which are steadier.
-- **Outlines:** an optional segmenter (`segmenter.kind: sam2`; `none` switches it off) outlines every stored
-  box. SAM 2 only traces what is inside a box YOLO found; it does not find or name anything. The outline itself
-  is stored (`detections.mask`, about 130 bytes each), so areas, per-cell coverage and duplicate removal are
-  derived in the table (`area.sam2*`, `cellarea.sam2`, `count.sam2*`) and can be re-derived with other rules
-  without re-running a model. A segmenter failure never loses a frame: its outline columns are NaN.
-- **Image vectors:** an optional embedder (`embedder.kind: dinov2`; `none` stops new vectors, old ones stay) stores
-  one whole-scene vector per photo (`frame_embeddings`, float16, 3 KB). It needs no detector and no VLM, so it
-  describes changes the object counts miss. The table derives `emb.<model>.pc1..pcN` (main directions of scene
-  variation), `drift_prev` (change since the last slot) and `drift_typical` (distance from the typical scene) from
-  the stored vectors, so they can be redefined without re-running a model. The components are learned from the
-  data in the table; for a back-test pass `--fit-end` so the future is kept out of the fit. A model change is a new
-  vector space (`model` is part of the key), so old and new vectors never mix. An embedder failure never loses a
-  frame: its image columns are NaN.
-- **Probes:** a space file can list `probes`: plain-English descriptions grouped by concept, several paraphrases
-  each ("an empty parking area", "a parking lot with no vehicles", ...). An optional scorer (`scorer.kind: siglip2`)
-  rates every photo against every prompt and the raw score is stored per (frame, scorer, prompt). The table has
-  `probe.<scorer>.<concept>` = the mean of the concept's paraphrases (NaN if any prompt is missing for a frame).
-  Add a prompt, run `sbi score`, and only the new question is asked of every stored photo. Checked against a
-  detector, "people" (cabin) and "bikes" (parking) hold up, also within daytime; tidy/messy, parking "car" and
-  "person" do not, so treat a probe as a measurement only after `sbi stability` and labels agree.
-- **Forecasting:** `forecast_targets` in the space file say what to forecast (names or wildcards, matched against the
-  table's model-ready columns). A *variant* is a named input set (`forecast.variants`: univariate, calendar,
-  detector, full, all, profile, all_profile). The calendar and the day-type profiles (`prof.<target>`) are known in
-  advance; everything else is past-only. `all` gives every model-ready column; `detector` and `full` give a capped
-  selection. See `docs/chronos-data-flow.md`. Every forecast is stored with the model, variant, targets and covariates it used. Count-like targets are
-  clipped at 0. The backtest rebuilds the column catalog from the history before each origin and gives the model
-  only rows up to it, so it cannot see the future; baselines (persistence, seasonal naive, seasonal mean) are the
-  bar. The live variant is `all_profile` (set in `config/pipeline.yaml`); rerun `sbi backtest` weekly to check it.
-- **Chronos table:** regular IST grid, NaN for missing slots (never 0, never a dropped row), every dimension kept;
-  the catalog says which columns are eligible and why, and a small default set is selected for models.
+- **Missing is not zero.** A slot with no photo, or a model that failed, gives an empty value, never a count of 0.
+- **Raw readings are kept.** Every detector box down to confidence 0.05 is stored with its outline, as are the VLM's
+  full answer, every description score and every image vector. Table columns are derived from them, so a rule can
+  change and history is re-derived without running a model again.
+- **Measure, do not smooth.** If a count is wrong, the fix is a better detector or counting rule, chosen by
+  benchmark against labels (`PLAN.md`, 18 Nov 2026). Values are not post-corrected.
+- **No future leaks.** The backtest rebuilds every choice from the history before each forecast moment. Only the
+  calendar and day-type profiles are given for the future.
+- **One transaction per photo.** Slow model work happens first, then every write for a photo commits together.
+- **Schema changes only by migration** (`src/sbi/store/migrations/NNN_*.sql`).
+- **Secrets only in `.env`.** Credentials are masked in logs and errors. The dashboard and labelling tool listen on
+  this machine only.
+- **The VLM is never shown a list of object names.** Named lists make it report things that are not there.
+  Prompts are open-vocabulary, and names are tidied afterwards by the taxonomy.
 
 ## Extending
 
-- **New space:** add `config/spaces/<id>.yaml` (copy an existing one). No code changes; the next tick picks it up.
-- **New forecaster (Timestral, TimesFM, a two-stage model):** implement `Forecaster` in `forecast/models.py`, register it in
-  `build_forecaster`; live runs, the backtest and storage need no change.
-- **New detector / segmenter / embedder / scorer / scene reader / camera source:** implement the Protocol in `perception/types.py`, register its
-  `kind` in `perception/factory.py` and in the settings model, select it in `config/pipeline.yaml`.
-- **New object type:** nothing to do. Unknown labels become `object_registry` rows flagged `auto_new`, and
-  `sbi curate` links them to existing names (synonym merge or is_a roll-up).
-- **Multi-room map:** `spaces.site_id / map_x / map_y / map_transform_json` are reserved and unused so far.
+| To add | Do this |
+|---|---|
+| A space (camera) | add `config/spaces/<id>.yaml` (copy one). The next run picks it up. |
+| A forecast series | add its column name or a wildcard to `forecast_targets` in the space file. |
+| A description to score | add a concept with a few paraphrases under `probes`, then run `sbi score --space ID`. |
+| A model (detector, outliner, embedder, scorer, scene reader, camera source) | implement the Protocol in `perception/types.py`, register its `kind` in `perception/factory.py` and the settings, select it in `config/pipeline.yaml`. After a detector change, run `sbi reprocess --detector-only`. |
+| A forecaster | implement `Forecaster` in `forecast/models.py` and register it in `build_forecaster`. Live runs, backtest and storage need no change. |
+| An object type | nothing. Unknown labels become registry rows flagged `auto_new`, and `sbi curate` links them. |
+
+See `docs/technical-deep-dive.md` for the details behind every line above.

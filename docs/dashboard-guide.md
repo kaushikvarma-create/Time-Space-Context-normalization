@@ -16,10 +16,10 @@ Open it with `scripts/dashboard.sh`, then go to http://localhost:8502. It only r
 | Part | Meaning |
 |---|---|
 | Date and time (right) | The time the page was last refreshed. |
-| Coloured dot and state word | **live**: the latest read photo is at most 20 minutes old. **late**: 20 to 60 minutes old. **stopped**: older than an hour, so capture or reading has stalled. **no photos**: nothing stored for that space. |
+| Coloured dot and state word | **live**: the latest read photo is at most 20 minutes old. **late**: 20 to 60 minutes old. **stopped**: older than an hour, so capture or reading has stalled. **no photos**: no photo for that space has been captured and read yet. |
 | photo 09:00 (10 min ago) | When the latest photo that has been read was taken, and its age. |
 | 5 vehicles, 0 people | What the detector counted in that photo. Vehicles are shown for parking only. |
-| forecast 09:00 | The time the newest stored forecast starts from. Forecasts are made on the hour. |
+| forecast 09:00 | The time the newest stored forecast starts from (scheduled forecasts run on the hour). |
 
 Below the header:
 
@@ -33,7 +33,7 @@ Below the header:
 The newest captured photo of the space, so the numbers can be compared with what the camera saw.
 
 ### The four tiles
-The four **headline series** for the space: the ones named in the space's settings file, then the object types counted most often. Each tile keeps the same colour as its chart below.
+The four **headline series** for the space: the series named exactly (not by wildcard) in the space's `forecast_targets`, then the detector counts with the highest average. Each tile keeps the same colour as its chart below.
 
 | Part | Meaning |
 |---|---|
@@ -177,7 +177,7 @@ A grid with one row per day and one cell per slot (96 per day).
 
 | Colour | Meaning |
 |---|---|
-| Green | Photo captured and fully read. |
+| Green | Photo captured and read, including by the VLM. |
 | Dark grey | Photo captured, waiting for the next run to read it. |
 | Amber | Photo captured and read by the detector, but the VLM failed, so VLM-based dimensions are empty for that slot. |
 | Red | No photo. |
@@ -185,7 +185,7 @@ A grid with one row per day and one cell per slot (96 per day).
 Hover over a cell for its day and time.
 
 ### Warnings and errors in the run log
-The most recent warning and error lines from `data/logs/tick.log`. An occasional "segmenter unavailable" line means one photo was stored without outlines; the rest of that photo was still read.
+The last 15 warning and error lines from `data/logs/tick.log`. An occasional "segmenter unavailable" line means one photo was stored without outlines; the rest of that photo was still read.
 
 ## Tab 4: All dimensions
 

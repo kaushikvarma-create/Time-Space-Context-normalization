@@ -1,5 +1,7 @@
 # Repo map and sweep (18 Nov 2026)
 
+For every detail of every module, setting, table and test, see `docs/technical-deep-dive.md`.
+
 A map of how the code fits together, what was checked in a full sweep, what was fixed, and what is still open.
 
 An interactive graph of the whole repo (1,731 nodes, 125 groups) is in `graphify-out/graph.html`; open it in a
