@@ -1,5 +1,4 @@
 """v1.0 operations: site calendar (known-future day types), scheduled forecasts inside the tick, live accuracy."""
-import json
 import sys
 import types
 from datetime import date, datetime, timedelta, timezone

@@ -37,7 +37,17 @@ class Sam2Segmenter:
         self.version = f"{weights.name}@{settings.mask_width}"
         log.info("segmenter %s loaded on %s", self.version, self._device)
 
+    def _outlines(self, image: np.ndarray, pixel: list[list[float]]):
+        """Masks for these boxes as an (n, H, W) float tensor in box order, or None when the model returned a
+        different number of masks than boxes (it drops a box it finds nothing in)."""
+        r = self._model(image, bboxes=pixel, verbose=False, device=self._device)[0]
+        if r.masks is None or len(r.masks.data) != len(pixel):
+            return None
+        return r.masks.data.float()
+
     def segment(self, image: np.ndarray, boxes: list[BBox]) -> list[SegMask]:
+        """One outline per box, in order. A box the model finds nothing in gets an empty outline (area 0) instead of
+        costing the whole photo its outlines: when a batch comes back short, its boxes are asked one at a time."""
         if not boxes:
             return []
         h, w = image.shape[:2]
@@ -49,11 +59,16 @@ class Sam2Segmenter:
             for start in range(0, len(boxes), self.cfg.batch):
                 chunk = boxes[start:start + self.cfg.batch]
                 pixel = [[b[0] * w, b[1] * h, b[2] * w, b[3] * h] for b in chunk]
-                r = self._model(image, bboxes=pixel, verbose=False, device=self._device)[0]
-                if r.masks is None or len(r.masks.data) != len(chunk):
-                    got = 0 if r.masks is None else len(r.masks.data)
-                    raise SegmenterError(f"segmenter returned {got} masks for {len(chunk)} boxes")
-                m = r.masks.data.float()                                     # (n, H, W), one per box, in order
+                m = self._outlines(image, pixel)
+                if m is None:                                                # short batch: find the empty box(es)
+                    singles = [self._outlines(image, [box]) for box in pixel]
+                    found = [one for one in singles if one is not None]
+                    if not found:
+                        raise SegmenterError(f"segmenter returned no mask for any of {len(chunk)} boxes")
+                    blank = torch.zeros_like(found[0])
+                    m = torch.cat([one if one is not None else blank for one in singles])
+                    log.info("segmenter: %d of %d boxes had nothing to outline (stored as empty outlines)",
+                             len(singles) - len(found), len(chunk))
                 areas = m.mean(dim=(1, 2)).tolist()
                 grids = (torch.nn.functional.interpolate(m[:, None], size=(gh, gw), mode="area")[:, 0] >= 0.5)
                 for area, grid in zip(areas, grids.cpu().numpy()):

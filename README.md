@@ -1,8 +1,13 @@
-# Space Behaviour Intelligence (SBI): baseline pipeline
+# Space Behaviour Intelligence (SBI)
 
-Camera stills every 15 min -> YOLO (counts, boxes, grid cell) + a vision LLM (semantics, scene state) ->
-SQLite -> time averages by (weekday, hour). Forecasting (Chronos-2 etc.) comes later, on top of this data.
-See `PLAN.md` for scope, decisions and known issues.
+Camera stills every 15 min -> five models read each photo into numbers (YOLO boxes, SAM 2 outlines, a vision LLM,
+a DINOv2 image vector, SigLIP 2 description scores) -> SQLite -> one table per space -> Chronos-2 forecasts the next
+4 hours, every hour. A read-only dashboard shows the numbers, the forecasts and how accurate they were.
+
+- `PLAN.md`: scope, decisions, benchmarks and known issues, in date order.
+- `docs/chronos-data-flow.md`: exactly what is given to Chronos-2 and what comes back.
+- `docs/dashboard-guide.md`: what every part of the dashboard means.
+- `docs/repo-map.md`: map of the code and the sweep of 18 Nov 2026 (what was checked, what is open).
 
 ## Layout
 
@@ -12,7 +17,11 @@ config/
   spaces/*.yaml          one file per space: camera channel, grid, vocabulary, aliases, scene fields
 scripts/
   tick.sh                what cron runs (flock, timeout, IST log, rotation)
+  dashboard.sh           the dashboard (http://localhost:8502)
   label.sh               blind labelling UI
+  curate.sh              scheduled vocabulary clean-up
+  detector_bench/        run any detector over the benchmark photos and score it against labels
+  windows/               keep WSL running after a Windows restart
 src/sbi/
   settings.py spaces.py  typed, validated config (unknown keys / bad references fail loudly)
   errors.py              SbiError hierarchy: ConfigError CameraError DetectorError SegmenterError EmbedderError
@@ -28,7 +37,7 @@ src/sbi/
   sitecal.py             known-in-advance day types: site holiday file (+ optional `holidays` package)
   dashboard/             read-only Streamlit dashboard (scripts/dashboard.sh)
   forecast/              table builder; Forecaster interface (Chronos-2, baselines); target/covariate choice;
-                         leak-free backtest; metrics; live runner
+                         day-type profiles; leak-free backtest; metrics; live runner; live accuracy
   embedding.py scoring.py  catch-up paths: image vectors / probe scores for frames that lack them
   imageio.py             read a stored frame's image
   tick.py cli.py         orchestration with per-space failure isolation; `python -m sbi <command>`
@@ -44,8 +53,9 @@ SQLite -> baselines; and every `forecast.every_minutes` (60) a Chronos-2 forecas
 Every stage is isolated: a failing model is logged and skipped, capture carries on.
 
 What you look at:
-- `scripts/dashboard.sh` -> http://localhost:8502 (this machine only, read-only): health of every stage over 24 h,
-  measured series with the latest forecast band, live forecast accuracy, the last backtest.
+- `scripts/dashboard.sh` -> http://localhost:8502 (this machine only, read-only): now and the next 4 hours,
+  forecast vs actual (also by day of week), the pipeline (what is extracted and what reaches the model), every
+  dimension, and a guide. See `docs/dashboard-guide.md`.
 - `PYTHONPATH=src python3 -m sbi accuracy --space parking`: stored forecasts scored against what then happened.
 - `PYTHONPATH=src python3 -m sbi backtest --space parking`: simulated forecasts from past moments (rerun weekly).
 - `data/logs/tick.log`: everything the tick did, in IST.
@@ -97,6 +107,10 @@ Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
 - **Never give the VLM a list of object names** (it reports listed things that are not there; see
   `docs/research/2026-11-13-photo-to-numbers.md`). Prompts are open-vocabulary; naming is cleaned up afterwards by
   the taxonomy (`same` / `is_a` links, raw labels kept forever, history re-mapped on any change).
+- **Detector:** YOLO26x at input size 1280, chosen by benchmark (`scripts/detector_bench/`, results in `PLAN.md`).
+  Weights go in `models/` (not in git): `yolo26x.pt`, `sam2.1_l.pt`. After changing the detector, run
+  `sbi reprocess --space ID --detector-only` so history is read by one detector; forecasts made before that are no
+  longer scored.
 - **Detector thresholds:** the detector stores every box down to `detector.store_conf` (0.05) in `detections`,
   with its confidence. Only boxes at or above the counting threshold (`detector.conf`, or a per-label
   `detector.class_conf`) become observations, links and totals. The table also counts at each
@@ -123,12 +137,13 @@ Exit codes: 0 ok, 1 some space failed, 2 fatal config error.
   detector, "people" (cabin) and "bikes" (parking) hold up, also within daytime; tidy/messy, parking "car" and
   "person" do not, so treat a probe as a measurement only after `sbi stability` and labels agree.
 - **Forecasting:** `forecast_targets` in the space file say what to forecast (names or wildcards, matched against the
-  table's model-ready columns). A *variant* is a named covariate set (`forecast.variants`: univariate, calendar,
-  detector, full); calendar is known in advance, everything else is past-only and chosen by the catalog's selection
-  rule. Every forecast is stored with the model, variant, targets and covariates it used. Count-like targets are
+  table's model-ready columns). A *variant* is a named input set (`forecast.variants`: univariate, calendar,
+  detector, full, all, profile, all_profile). The calendar and the day-type profiles (`prof.<target>`) are known in
+  advance; everything else is past-only. `all` gives every model-ready column; `detector` and `full` give a capped
+  selection. See `docs/chronos-data-flow.md`. Every forecast is stored with the model, variant, targets and covariates it used. Count-like targets are
   clipped at 0. The backtest rebuilds the column catalog from the history before each origin and gives the model
   only rows up to it, so it cannot see the future; baselines (persistence, seasonal naive, seasonal mean) are the
-  bar. `forecast.variant` stays `calendar` until a backtest shows another set winning on enough data.
+  bar. The live variant is `all_profile` (set in `config/pipeline.yaml`); rerun `sbi backtest` weekly to check it.
 - **Chronos table:** regular IST grid, NaN for missing slots (never 0, never a dropped row), every dimension kept;
   the catalog says which columns are eligible and why, and a small default set is selected for models.
 

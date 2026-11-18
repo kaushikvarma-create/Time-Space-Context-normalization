@@ -1,6 +1,6 @@
 """Score every candidate's saved boxes. Chairs: truth is 7 in every cabin photo. Other types: the hand labels.
 The counting threshold is chosen on half the photos (even positions) and reported on the other half."""
-import json, sqlite3, sys
+import json, sqlite3
 from pathlib import Path
 import numpy as np, pandas as pd
 ROOT = Path(__file__).resolve().parents[2]; OUT = ROOT / "data" / "exports" / "detector_bench"

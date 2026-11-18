@@ -13,9 +13,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-detector = ["ultralytics"]
-ui = ["streamlit", "altair"]
-forecast = ["chronos-forecasting"]
+# Versions are the oldest known to work here (18 Nov 2026 install: ultralytics 8.4.71, transformers 5.15.1,
+# torch 2.11.0, chronos-forecasting 2.3.2). YOLO26 weights need ultralytics 8.4 or newer.
+detector = ["ultralytics>=8.4"]                 # YOLO detector and SAM 2 outlines
+vision = ["torch", "transformers"]              # DINOv2 image vectors and SigLIP 2 description scores
+ui = ["streamlit>=1.50", "altair"]              # dashboard and labelling tool
+forecast = ["chronos-forecasting>=2.0"]         # Chronos-2
 holidays = ["holidays"]          # optional: automatic public holidays (the site calendar file works without it)
 dev = ["pytest"]
 

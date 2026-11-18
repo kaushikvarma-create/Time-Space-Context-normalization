@@ -1,7 +1,5 @@
 """Dashboard: the data it shows (health, log problems, charts, latest forecast) and a smoke run of the real app."""
-import json
-import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
