@@ -1,0 +1,18 @@
+# The read-only SBI dashboard as a user service: starts with the machine, restarts if it stops.
+# Installed by scripts/install-dashboard-service.sh (which fills in the project path).
+[Unit]
+Description=SBI dashboard (http://localhost:8502)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/scripts/dashboard.sh
+Restart=always
+RestartSec=5
+# stay small next to the 15-minute capture run: no GPU use, modest memory
+Environment=CUDA_VISIBLE_DEVICES=
+MemoryMax=4G
+
+[Install]
+WantedBy=default.target
