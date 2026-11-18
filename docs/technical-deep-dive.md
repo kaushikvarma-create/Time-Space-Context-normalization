@@ -4538,8 +4538,14 @@ Fixtures:
 
 ### 5.2 Code inconsistencies found while writing this document
 
-None of these affects today's live results. Each was confirmed by reading the code. They are listed so they can be
-fixed deliberately.
+**Status: fixed on 18 Nov 2026 (commit `6c2b52d`, 16 regression tests in `tests/test_fixes.py` and
+`tests/test_labelling.py`).** Two items were kept by choice:
+
+- The schema parts with no writer stay reserved.
+- The labelling tool's per-run connection is left to be closed when the run's namespace is discarded.
+
+The fix also added migration `009_events_cascade.sql`, which rebuilds `events` with `ON DELETE CASCADE`, so the
+schema is now at version 9. The list below records what was found.
 
 **Capture and operations**
 
