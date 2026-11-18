@@ -7,7 +7,7 @@ from sbi.forecast.mask_features import mask_features
 from sbi.forecast.table import build_table, is_variant, select_covariates
 from sbi.perception.factory import build_segmenter
 from sbi.perception.masks import cell_shares, decode_mask, drop_duplicate_masks, encode_mask, mask_iou
-from sbi.perception.types import SegMask
+from sbi.perception.types import Detection, SegMask
 from sbi.pipeline import process_frame
 from sbi.settings import SegmenterSettings
 from sbi.tick import run_tick
@@ -151,3 +151,50 @@ def test_table_outline_columns_and_frames_without_outlines_are_unknown(conn, spa
     assert not [c for c in t.columns if c.startswith("cellarea.sam2_c")]              # per-cell: counted boxes only
     sel = select_covariates(res.catalog, targets=[], max_covariates=500, always=[], min_autocorr=0.3, autocorr_min_slots=1000)
     assert not [c for c in sel if "_c05" in c or "_c10" in c or c.startswith("count.sam2.")]
+
+
+# ---------------------------------------------------------------- outline duplicates in the counted set
+def test_uncount_outline_duplicates_keeps_the_stronger_box_per_object_and_type():
+    from sbi.perception.dedupe import uncount_outline_duplicates
+    same, other, box = rect(0, 0, 10, 10), rect(30, 0, 40, 10), (0.0, 0.0, 0.2, 0.3)
+    dets = [Detection("chair", 0.30, box), Detection("chair", 0.90, box),      # one chair, boxed twice
+            Detection("chair", 0.60, (0.5, 0.0, 0.7, 0.3)),                     # another chair
+            Detection("person", 0.50, box),                                     # same outline, other type
+            Detection("chair", 0.08, box, counted=False)]                       # was never counted
+    out = uncount_outline_duplicates(dets, [same, same, other, same, same], 0.5)
+    assert [d.counted for d in out] == [False, True, True, True, False]
+    assert [(d.label, d.conf, d.bbox) for d in out] == [(d.label, d.conf, d.bbox) for d in dets]       # nothing else changes
+    partly = rect(0, 0, 10, 4)                                                  # 40% of the first outline: a neighbour
+    assert [d.counted for d in uncount_outline_duplicates(dets[:2], [partly, same], 0.5)] == [True, True]
+    assert [d.counted for d in uncount_outline_duplicates(dets[:2], [partly, same], 0.4)] == [False, True]
+    empty = np.zeros((36, 64), bool)
+    assert all(d.counted for d in uncount_outline_duplicates(dets[:2], [empty, empty], 0.5))            # nothing to compare
+    assert uncount_outline_duplicates([], [], 0.5) == []
+    with pytest.raises(ValueError, match="1 outlines for 2 detections"):
+        uncount_outline_duplicates(dets[:2], [same], 0.5)
+
+
+def test_pipeline_counts_an_object_boxed_twice_once_when_asked_and_keeps_both_boxes(conn, space, root):
+    # two chair boxes around one chair (box IoU 0.53: under the box rule's 0.6), a second chair, and a person
+    boxed = [Detection("chair", 0.9, (0.10, 0.1, 0.30, 0.5)), Detection("chair", 0.3, (0.05, 0.1, 0.33, 0.5)),
+             Detection("chair", 0.8, (0.60, 0.1, 0.80, 0.5)), Detection("person", 0.9, (0.10, 0.1, 0.30, 0.5))]
+    one, two = rect(6, 4, 19, 18), rect(38, 4, 51, 18)
+    outlines = [SegMask(0.08, one), SegMask(0.08, one), SegMask(0.08, two), SegMask(0.08, one)]
+
+    def go(minute, **kw):
+        c = cap(conn, space, root, FakeSource([synthetic_image(minute)]), thursday_ist(10, minute))
+        res = process_frame(conn, space, c.frame_id, FakeDetector(boxed), FakeReader(), root=root, **kw)
+        chairs = conn.execute("SELECT COALESCE(SUM(count), 0) FROM observations WHERE frame_id=? AND source='yolo' "
+                              "AND object_type='chair'", (c.frame_id,)).fetchone()[0]
+        flags = sorted(r[0] for r in conn.execute("SELECT counted FROM detections WHERE frame_id=?", (c.frame_id,)))
+        return res, chairs, flags
+
+    res, chairs, flags = go(0, segmenter=FakeSegmenter(masks=outlines), dedupe_outline_iou=0.5)
+    assert chairs == 2 and res.boxes == 3 and res.boxes_stored == 4 and flags == [0, 1, 1, 1]     # stored, not counted
+    assert res.people_yolo == 1                                                                   # another type: untouched
+    res, chairs, flags = go(15, segmenter=FakeSegmenter(masks=outlines))                          # switched off (default)
+    assert chairs == 3 and res.boxes == 4 and flags == [1, 1, 1, 1]
+    res, chairs, _ = go(30, dedupe_outline_iou=0.5)                                               # no segmenter
+    assert chairs == 3 and not res.masks_ok
+    res, chairs, _ = go(45, segmenter=FakeSegmenter(error=SegmenterError("down")), dedupe_outline_iou=0.5)
+    assert chairs == 3 and not res.masks_ok                                                       # outliner failed: as boxed

@@ -121,7 +121,8 @@ def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource
             for fid in todo:
                 try:
                     res = process_frame(conn, space, fid, detector, reader, root=settings.root,
-                                        segmenter=segmenter, embedder=embedder, scorer=scorer)
+                                        segmenter=segmenter, embedder=embedder, scorer=scorer,
+                                        dedupe_outline_iou=settings.detector.dedupe_outline_iou)
                 except DetectorError as e:
                     log.error("%s frame %d: detector failed, leaving it queued: %s", space.space_id, fid, e)
                     break                    # do not hammer a broken detector with the rest of the backlog

@@ -135,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
                 for i in ids:
                     try:
                         done += process_frame(conn, space, i, detector, reader, root=settings.root,
-                                              replay_vlm=args.detector_only, segmenter=segmenter).processed
+                                              replay_vlm=args.detector_only, segmenter=segmenter,
+                                              dedupe_outline_iou=settings.detector.dedupe_outline_iou).processed
                     except SbiError as e:      # that frame is left exactly as it was; keep going
                         failed += 1
                         log.error("frame %d not reprocessed: %s", i, e)

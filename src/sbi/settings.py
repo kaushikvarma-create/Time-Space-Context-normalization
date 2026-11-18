@@ -42,6 +42,8 @@ class DetectorSettings(_Strict):
     dedupe_labels: list[str] = ["person"]
     dedupe_containment: float = Field(0.8, gt=0, le=1)
     dedupe_same_label_iou: float = Field(0.6, gt=0, le=1)
+    dedupe_outline_iou: float = Field(0.0, ge=0, le=1)   # counted boxes of one type whose outlines overlap this much are
+                                                         # one object (needs the segmenter); 0 = off
 
     @model_validator(mode="after")
     def _thresholds_above_floor(self) -> "DetectorSettings":

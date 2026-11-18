@@ -21,11 +21,14 @@ detector:                       # kind: yolo
   imgsz: 1280                   # vs 31% for yolo12x at 1920. Larger sizes were worse here (1920: 59%), not better
   conf: 0.25                    # counting threshold: boxes at or above it are counted (observations, baselines)
   store_conf: 0.05              # storage floor: every box down to here is kept in `detections`, uncounted
-  class_conf: {}                # per-label counting thresholds, e.g. {motorcycle: 0.10}; set these from labels
+  class_conf: {chair: 0.10, motorcycle: 0.10}   # per-label counting thresholds, set from labels and the known chair
+                                # count (18 Nov 2026): with duplicate outlines removed, 0.10 beats 0.25 for both
   iou: 0.5
   dedupe_labels: [person]       # labels where a box mostly inside a stronger box is dropped
   dedupe_containment: 0.8
   dedupe_same_label_iou: 0.6    # same label, overlapping boxes (e.g. handbag+backpack -> bag)
+  dedupe_outline_iou: 0.5       # counted boxes of one type whose OUTLINES overlap this much are one object: the weaker
+                                # stops being counted (it stays stored). Needs the segmenter; 0 = off
 
 segmenter:                      # outlines every stored detector box; kind: none switches it off
   kind: sam2

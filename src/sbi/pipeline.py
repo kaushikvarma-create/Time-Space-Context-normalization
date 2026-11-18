@@ -29,6 +29,7 @@ from pathlib import Path
 from .errors import EmbedderError, ScorerError, SegmenterError, StorageError, VLMError
 from .imageio import read_frame_image
 from .grid import bbox_to_cell
+from .perception.dedupe import uncount_outline_duplicates
 from .perception.geometry import overlap_links
 from .perception.normalise import canonical
 from .perception.masks import encode_mask
@@ -80,7 +81,10 @@ def _stored_reading(frame, space: SpaceConfig, reader: SceneReader | None) -> tu
 
 def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, reader: SceneReader | None, *,
                   root: Path, replay_vlm: bool = False, segmenter: Segmenter | None = None,
-                  embedder: Embedder | None = None, scorer: Scorer | None = None) -> FrameResult:
+                  embedder: Embedder | None = None, scorer: Scorer | None = None,
+                  dedupe_outline_iou: float = 0.0) -> FrameResult:
+    """`dedupe_outline_iou` > 0 (with a segmenter): counted boxes of one type whose outlines overlap that much are
+    counted once (detector.dedupe_outline_iou)."""
     frame = get_frame(conn, frame_id)
     if frame is None:
         raise StorageError(f"frame {frame_id} does not exist")
@@ -103,6 +107,8 @@ def process_frame(conn, space: SpaceConfig, frame_id: int, detector: Detector, r
             log.warning("%s frame %d: segmenter unavailable, storing boxes without outlines: %s",
                         space.space_id, frame_id, e)
     seg_version = segmenter.version if segmenter is not None and masks is not None else None
+    if masks is not None and dedupe_outline_iou > 0:
+        detections = uncount_outline_duplicates(detections, [m.grid for m in masks], dedupe_outline_iou)
 
     vector = None
     if embedder is not None:

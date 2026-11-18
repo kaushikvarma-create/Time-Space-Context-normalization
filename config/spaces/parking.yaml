@@ -32,6 +32,9 @@ vocabulary:
   helmet:     {category: item,    mobility: dynamic}
   barrier:    {category: fixture, mobility: fixed}
   pole:       {category: fixture, mobility: fixed}
+  chair:      {category: furniture, mobility: semi_static}   # the guard's desk: found in every labelled photo
+  bottle:     {category: item,    mobility: dynamic}
+  bag:        {category: item,    mobility: dynamic}
   gate:       {category: fixture, mobility: fixed}
 
 aliases:
@@ -52,6 +55,11 @@ detector_map:
   truck: truck
   bus: bus
   person: person
+  chair: chair
+  bottle: bottle
+  backpack: bag
+  handbag: bag
+  suitcase: bag
 
 scene_fields:
   lighting: [daylight, artificial, dim, dark]

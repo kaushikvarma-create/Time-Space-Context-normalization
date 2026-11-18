@@ -89,6 +89,7 @@ detector_map:
   "cell phone": phone
   backpack: bag
   handbag: bag
+  suitcase: bag              # the detector calls the large black bag on the desk a suitcase
   bottle: bottle
   cup: cup
   book: book
