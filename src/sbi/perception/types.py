@@ -24,7 +24,7 @@ class Detection:
 
 @dataclass(frozen=True, eq=False)
 class SegMask:
-    area: float           # share of the full-resolution image covered by the outline
+    area: float           # share of the model's mask (the full image, as Ultralytics returns it) covered by the outline
     grid: np.ndarray      # low-resolution boolean copy of the outline (what gets stored)
 
 

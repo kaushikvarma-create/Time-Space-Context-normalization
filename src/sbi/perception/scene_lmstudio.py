@@ -94,9 +94,13 @@ def parse_reading(text: str, space: SpaceConfig, *, model: str, latency_s: float
     people_count = data["people_count"]
     if not isinstance(people_count, int) or isinstance(people_count, bool) or people_count < 0:
         raise ValueError(f"invalid people_count {people_count!r}")
+    if not isinstance(data.get("objects"), list):
+        raise ValueError("objects is not a list")
     objects = []
     for o in data["objects"]:
-        label, count = o["label"], o["count"]
+        if not isinstance(o, dict):
+            raise ValueError(f"invalid object entry {o!r}")
+        label, count = o.get("label"), o.get("count")
         if not isinstance(label, str) or not label.strip():
             raise ValueError(f"invalid object label {label!r}")
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
@@ -105,6 +109,9 @@ def parse_reading(text: str, space: SpaceConfig, *, model: str, latency_s: float
         objects.append(SceneObject(label.strip(), count, status if status in STATUS_VALUES else "unknown"))
     relations = []
     for r in data.get("relations") or ():
+        if not isinstance(r, dict):
+            log.debug("dropping malformed relation %r", r)
+            continue
         subj, pred, obj, n = r.get("subject"), r.get("predicate"), r.get("object"), r.get("count")
         ok = (isinstance(subj, str) and subj.strip() and isinstance(obj, str) and obj.strip() and pred in PREDICATES
               and isinstance(n, int) and not isinstance(n, bool) and n >= 1)
@@ -116,7 +123,8 @@ def parse_reading(text: str, space: SpaceConfig, *, model: str, latency_s: float
     for name, allowed in space.scene_fields.items():
         v = data.get(name)
         scene[name] = v if v in allowed else ("unknown" if "unknown" in allowed else None)
-    return SceneReading(people_count=people_count, people=tuple(data.get("people") or ()),
+    people = tuple(p for p in (data.get("people") or ()) if isinstance(p, dict))   # a malformed entry is dropped
+    return SceneReading(people_count=people_count, people=people,
                         objects=tuple(objects), scene=scene, summary=str(data.get("summary", "")), raw=text,
                         model=model, prompt_version=PROMPT_VERSION, relations=tuple(relations), latency_s=latency_s)
 

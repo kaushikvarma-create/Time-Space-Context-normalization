@@ -81,4 +81,4 @@ def migrate(conn: sqlite3.Connection, directory: Path = MIGRATIONS_DIR) -> int:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise StorageError(f"migration {path.name} failed: {e}") from e
-    return files[-1][0] if files else current
+    return max(current, files[-1][0]) if files else current

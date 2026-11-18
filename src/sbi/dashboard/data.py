@@ -80,7 +80,7 @@ def chart_data(table: pd.DataFrame, forecast: pd.DataFrame, target: str, *, days
                                  "low": float("nan"), "high": float("nan")}))
     if not forecast.empty:
         f = forecast[forecast["target"] == target]
-        qs = sorted(c for c in f.columns if c.startswith("q") and c[1:].isdigit())
+        qs = sorted((c for c in f.columns if c.startswith("q") and c[1:].isdigit()), key=lambda c: int(c[1:]))
         if len(f) and "q50" in qs:
             out.append(pd.DataFrame({"timestamp": pd.to_datetime(f["timestamp"]), "kind": "forecast",
                                      "value": f["q50"].to_numpy(float), "low": f[qs[0]].to_numpy(float),
@@ -156,9 +156,10 @@ def usual(series: pd.Series, when: pd.DatetimeIndex, *, before: pd.Timestamp | N
 
 
 def summary(table: pd.DataFrame, forecast: pd.DataFrame, targets: list[str], *,
-            leads: tuple[int, ...] = (4, 8, 16), step_minutes: int = 15) -> pd.DataFrame:
+            lead_minutes: tuple[int, ...] = (60, 120, 240), step_minutes: int = 15) -> pd.DataFrame:
     """One row per target: the latest measured value, the usual value at this clock time, and the stored forecast
-    (median, low, high) at each lead (in slots)."""
+    (median, low, high) at each lead. `step_minutes` is the forecast run's slot length."""
+    leads = tuple(m // step_minutes for m in lead_minutes if m % step_minutes == 0)
     rows = []
     for t in targets:
         if t not in table.columns:
@@ -301,14 +302,15 @@ def dimension_flow(catalog: pd.DataFrame, run: dict | None) -> pd.DataFrame:
     return pd.concat([g, pd.DataFrame([total])], ignore_index=True)
 
 
-def dimensions(table: pd.DataFrame, catalog: pd.DataFrame, run: dict | None, forecast: pd.DataFrame) -> pd.DataFrame:
+def dimensions(table: pd.DataFrame, catalog: pd.DataFrame, run: dict | None, forecast: pd.DataFrame,
+               step_minutes: int = 15) -> pd.DataFrame:
     """One row per extracted dimension: latest value, usual value at this time, range, coverage, and what happens
     to it (forecast / given to the model / kept only in the table, with the reason)."""
     sent = set(run["covariates"]) if run else set()
     targets = set(run["targets"]) if run else set()
     next_hour = {}
     if not forecast.empty and "q50" in forecast.columns:
-        next_hour = forecast[forecast["step"] == 4].set_index("target")["q50"].to_dict()
+        next_hour = forecast[forecast["step"] == 60 // step_minutes].set_index("target")["q50"].to_dict()
     last = table.iloc[-1] if len(table) else pd.Series(dtype=object)
     rows = []
     for r in catalog.itertuples(index=False):

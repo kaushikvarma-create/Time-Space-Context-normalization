@@ -153,7 +153,7 @@ class ForecastSettings(_Strict):
 
     @model_validator(mode="after")
     def _variant_known(self) -> "ForecastSettings":
-        if self.every_minutes and self.every_minutes % 15:
+        if self.every_minutes and self.every_minutes % 15:      # the tick (cron) runs every 15 minutes
             raise ValueError("forecast.every_minutes must be a multiple of the 15-minute tick (or 0 to switch off)")
         if self.variant not in self.variants:
             raise ValueError(f"forecast.variant {self.variant!r} is not one of {sorted(self.variants)}")
@@ -202,7 +202,8 @@ class TableSettings(_Strict):
     @field_validator("conf_levels")
     @classmethod
     def _levels(cls, v: list[float]) -> list[float]:
-        if any(not 0 < x < 1 for x in v) or len({round(x * 100) for x in v}) != len(v):
+        if (any(not 0 < x < 1 for x in v) or any(abs(x * 100 - round(x * 100)) > 1e-9 for x in v)
+                or len({round(x * 100) for x in v}) != len(v)):
             raise ValueError("conf_levels must be distinct values in (0, 1), two decimals at most")
         return sorted(v)
 
@@ -262,17 +263,25 @@ class Settings(_Strict):
 
 
 def load_dotenv(path: Path) -> None:
-    """Minimal KEY=VALUE loader. Real environment variables win over the file."""
+    """Minimal KEY=VALUE loader. Real environment variables win over the file. Accepts an `export ` prefix, a value
+    in matching single or double quotes (kept as written inside them), and a ` #` comment after an unquoted value."""
     if not path.exists():
         return
     for n, line in enumerate(path.read_text().splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
         if "=" not in line:
             raise ConfigError(f"{path}:{n}: expected KEY=VALUE")
         k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        elif " #" in v:
+            v = v.split(" #", 1)[0].rstrip()
+        os.environ.setdefault(k.strip(), v)
 
 
 def load_settings(root: Path | str | None = None, config_file: str = "config/pipeline.yaml") -> Settings:
@@ -285,6 +294,10 @@ def load_settings(root: Path | str | None = None, config_file: str = "config/pip
         raise ConfigError(f"settings file not found: {cfg_path}") from e
     except yaml.YAMLError as e:
         raise ConfigError(f"invalid YAML in {cfg_path}: {e}") from e
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{cfg_path} must be a mapping of settings, not {type(raw).__name__}")
+    if "root" in raw:
+        raise ConfigError(f"{cfg_path}: 'root' is not a setting (it is the folder the settings file is in)")
     reader = dict(raw.get("scene_reader") or {})
     if os.environ.get("SBI_LMSTUDIO_URL"):
         reader["base_url"] = os.environ["SBI_LMSTUDIO_URL"]

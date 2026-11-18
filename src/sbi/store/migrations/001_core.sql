@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS object_registry (
   object_type     TEXT PRIMARY KEY,         -- canonical label, e.g. 'person', 'car', 'chair'
   category        TEXT,                     -- person | vehicle | furniture | device | item | other
   mobility_prior  TEXT NOT NULL DEFAULT 'unknown',  -- fixed | semi_static | dynamic | unknown (seeded guess)
-  review_status   TEXT NOT NULL DEFAULT 'seed',     -- seed | approved | auto_new | needs_review
+  review_status   TEXT NOT NULL DEFAULT 'seed',     -- seed | approved | auto_new | needs_review | merged
   first_seen_utc  TEXT,
   first_seen_frame_id INTEGER,
   first_seen_space_id TEXT,
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS events (
   space_id    TEXT NOT NULL,
   ts_utc      TEXT NOT NULL,
   frame_id    INTEGER REFERENCES frames(frame_id),
-  event_type  TEXT NOT NULL,                -- new_object_type | object_appeared | object_gone | became_empty | became_occupied
+  event_type  TEXT NOT NULL,                -- new_object_type | became_empty | became_occupied (see 009)
   object_type TEXT,
   cell_id     TEXT,
   resolution  TEXT NOT NULL DEFAULT 'interval',  -- stills: inferred between frames, not observed
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS baseline_cell (
 -- Whole-space metrics per (weekday, hour): people, vehicles, brightness, ...
 CREATE TABLE IF NOT EXISTS baseline_space (
   space_id    TEXT NOT NULL,
-  metric      TEXT NOT NULL,                -- people_total | vehicles_total | brightness | occupied_cells ...
+  metric      TEXT NOT NULL,                -- people_yolo | people_vlm | vehicles_yolo | brightness
   dow         INTEGER NOT NULL,
   hour        INTEGER NOT NULL,
   n_frames    INTEGER NOT NULL,

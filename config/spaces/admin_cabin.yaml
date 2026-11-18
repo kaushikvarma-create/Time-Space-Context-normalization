@@ -23,8 +23,8 @@ grid:
   rows: 6
   anchor: bottom_center   # floor objects: use the box's bottom-centre (feet / wheels) for the cell
 
-# Canonical vocabulary shown to the VLM as "prefer these labels".
-# Anything not matching a label or alias becomes a new registry row flagged auto_new.
+# Canonical vocabulary: the names counts are filed under. The VLM is NOT shown it (open-vocabulary prompt);
+# its free-text labels are matched to these names and aliases, and anything else becomes a registry row flagged auto_new.
 vocabulary:
   person:   {category: person,    mobility: dynamic}
   chair:    {category: furniture, mobility: semi_static}
@@ -50,8 +50,8 @@ vocabulary:
 aliases:
   couch: sofa
   settee: sofa
-  tv: screen
-  television: screen
+  tv: monitor                # as in detector_map: the screens in this room are monitors
+  television: monitor
   display: monitor
   computer: monitor
   notebook: laptop

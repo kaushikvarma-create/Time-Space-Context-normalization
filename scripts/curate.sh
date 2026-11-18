@@ -11,8 +11,11 @@ LOG=data/logs/curate.log
 mkdir -p data/logs
 exec 9>data/.curate.lock
 flock -n 9 || { echo "$(date -Is) WARNING curation skipped: previous run still active" >> "$LOG"; exit 0; }
+[ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 10485760 ] && mv "$LOG" "$LOG.1"
+PY=.venv/bin/python
+[ -x "$PY" ] || PY=python3
 echo "$(date -Is) curation start" >> "$LOG"
-timeout 3600 python3 -m sbi curate >> "$LOG" 2>&1
+timeout 3600 "$PY" -m sbi curate >> "$LOG" 2>&1
 rc=$?
 echo "$(date -Is) curation end rc=$rc" >> "$LOG"
 exit $rc

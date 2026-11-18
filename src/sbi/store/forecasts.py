@@ -40,7 +40,7 @@ def load_forecast(conn: sqlite3.Connection, run_id: int) -> pd.DataFrame:
                            params=(run_id,))
     if df.empty:
         return pd.DataFrame(columns=["target", "timestamp", "step"])
-    df["q"] = "q" + (df["quantile"] * 100).round().astype(int).astype(str)
+    df["q"] = df["quantile"].map(lambda q: f"q{round(q * 100):02d}")   # as forecast.models.qname: q05, q10, q50, ...
     wide = df.pivot_table(index=["target", "ts_local", "step"], columns="q", values="value").reset_index()
     wide = wide.rename(columns={"ts_local": "timestamp"})
     wide["timestamp"] = pd.to_datetime(wide["timestamp"])

@@ -58,24 +58,64 @@ def _support(conn: sqlite3.Connection, name: str) -> tuple[int, int]:
 
 
 def pick_canonical(conn: sqlite3.Connection, a: str, b: str) -> tuple[str, str]:
-    """(canonical, merged): prefer configured/reviewed names, then the more observed one, then the shorter."""
+    """(canonical, merged): prefer configured/reviewed names, then the more observed one, then the shorter, then the
+    alphabetically later (a fixed rule, so the choice never depends on argument order)."""
     ka = (*_support(conn, a), -len(a), a)
     kb = (*_support(conn, b), -len(b), b)
     return (a, b) if ka >= kb else (b, a)
 
 
 def apply_same(conn: sqlite3.Connection, child: str, parent: str) -> None:
-    """Merge `child` into `parent`. Caller holds the transaction."""
+    """Merge `child` into `parent`. Caller holds the transaction. Everything the merge changes is recorded on the
+    link row (evidence_json "undo"), so undo_same can put it back exactly."""
+    row = conn.execute("SELECT review_status FROM object_registry WHERE object_type=?", (child,)).fetchone()
+    old_alias = conn.execute("SELECT object_type FROM object_alias WHERE alias=?", (spaced(child),)).fetchone()
+    undo = {"status": row[0] if row else None,
+            "merged_names": [r[0] for r in conn.execute("SELECT object_type FROM object_registry WHERE merged_into=?",
+                                                        (child,))],
+            "aliases": [r[0] for r in conn.execute("SELECT alias FROM object_alias WHERE object_type=?", (child,))],
+            "alias_before": old_alias[0] if old_alias else None}
     conn.execute("UPDATE object_registry SET merged_into=?, review_status='merged' WHERE object_type=?", (parent, child))
     conn.execute("UPDATE object_registry SET merged_into=? WHERE merged_into=?", (parent, child))
     conn.execute("UPDATE object_alias SET object_type=? WHERE object_type=?", (parent, child))
     conn.execute("INSERT OR REPLACE INTO object_alias(alias,object_type) VALUES(?,?)", (spaced(child), parent))
+    _set_undo(conn, child, parent, undo)
+
+
+def _set_undo(conn: sqlite3.Connection, child: str, parent: str, undo: dict | None) -> None:
+    row = conn.execute("SELECT link_id, evidence_json FROM object_links WHERE child=? AND parent=? AND relation='same'",
+                       (child, parent)).fetchone()
+    if row is None:
+        return
+    evidence = json.loads(row[1]) if row[1] else {}
+    if undo is None:
+        evidence.pop("undo", None)
+    else:
+        evidence["undo"] = undo
+    conn.execute("UPDATE object_links SET evidence_json=? WHERE link_id=?", (json.dumps(evidence), row[0]))
 
 
 def undo_same(conn: sqlite3.Connection, child: str, parent: str) -> None:
-    conn.execute("UPDATE object_registry SET merged_into=NULL, review_status='approved' WHERE object_type=? "
-                 "AND merged_into=?", (child, parent))
-    conn.execute("DELETE FROM object_alias WHERE alias=? AND object_type=?", (spaced(child), parent))
+    """Reverse apply_same: the child's own status, the names and aliases that pointed at the child, and the alias that
+    the child's name had before. Merges recorded before this was kept (no "undo" on the link) fall back to
+    un-merging the child and dropping its alias."""
+    row = conn.execute("SELECT evidence_json FROM object_links WHERE child=? AND parent=? AND relation='same'",
+                       (child, parent)).fetchone()
+    undo = (json.loads(row[0]) if row and row[0] else {}).get("undo")
+    status = (undo or {}).get("status") or "approved"
+    conn.execute("UPDATE object_registry SET merged_into=NULL, review_status=? WHERE object_type=? AND merged_into=?",
+                 (status, child, parent))
+    if undo:
+        for name in undo.get("merged_names", []):
+            conn.execute("UPDATE object_registry SET merged_into=? WHERE object_type=? AND merged_into=?", (child, name, parent))
+        for alias in undo.get("aliases", []):
+            conn.execute("UPDATE object_alias SET object_type=? WHERE alias=? AND object_type=?", (child, alias, parent))
+    before = (undo or {}).get("alias_before")
+    if before:
+        conn.execute("UPDATE object_alias SET object_type=? WHERE alias=? AND object_type=?", (before, spaced(child), parent))
+    else:
+        conn.execute("DELETE FROM object_alias WHERE alias=? AND object_type=?", (spaced(child), parent))
+    _set_undo(conn, child, parent, None)
 
 
 def _record(conn: sqlite3.Connection, child: str, parent: str, relation: str, *, approved: bool, similarity: float,

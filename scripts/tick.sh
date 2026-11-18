@@ -7,13 +7,14 @@ cd "$(dirname "$0")/.."
 export TZ=Asia/Kolkata PYTHONPATH=src
 LOG=data/logs/tick.log
 mkdir -p data/logs
-[ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 10485760 ] && mv "$LOG" "$LOG.1"
 
 exec 9>data/.tick.lock
 if ! flock -n 9; then
   echo "$(date -Is) WARNING tick skipped: previous tick still running" >> "$LOG"
   exit 0
 fi
+# rotate only while holding the lock, so a running tick never has its log renamed underneath it
+[ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 10485760 ] && mv "$LOG" "$LOG.1"
 
 # the project venv (system packages + Chronos-2 for scheduled forecasts); the system python if the venv is missing
 PY=.venv/bin/python

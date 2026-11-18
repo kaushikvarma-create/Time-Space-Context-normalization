@@ -32,7 +32,8 @@ def _init():
 
 try:
     settings, spaces = _init()
-    conn = connect(settings.db_path)              # one per page run, in this run's thread
+    conn = connect(settings.db_path)              # one per page run, in this run's thread; closed when the run's
+                                                  # script namespace is discarded (SQLite closes on garbage collection)
 except SbiError as e:
     st.error(f"Setup problem: {e}")
     st.stop()

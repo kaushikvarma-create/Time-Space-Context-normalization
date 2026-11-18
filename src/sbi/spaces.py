@@ -43,7 +43,7 @@ class SpaceConfig(_Strict):
     space_type: str
     camera: CameraRef
     tz: str = "Asia/Kolkata"
-    cadence_minutes: int = Field(15, ge=1)
+    cadence_minutes: int = Field(15, ge=1)   # for display; the capture interval itself is set by cron
     label_types: list[str] = []
     mask_regions: list[tuple[float, float, float, float]] = []
     grid: Grid

@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from ..spaces import SpaceConfig
+from ..taxonomy import spaced
 from ..timeutil import now_utc
 from .db import transaction
 
@@ -24,8 +25,8 @@ def register_space(conn: sqlite3.Connection, space: SpaceConfig, config_path: Pa
         for label, v in space.vocabulary.items():
             conn.execute("""INSERT OR IGNORE INTO object_registry(object_type,category,mobility_prior,review_status)
                             VALUES(?,?,?,'seed')""", (label, v.category, v.mobility))
-        for alias, target in space.aliases.items():
-            conn.execute("INSERT OR REPLACE INTO object_alias(alias,object_type) VALUES(?,?)", (alias.lower(), target))
+        for alias, target in space.aliases.items():   # stored in the spaced form lookups use; the space file wins
+            conn.execute("INSERT OR REPLACE INTO object_alias(alias,object_type) VALUES(?,?)", (spaced(alias), target))
 
 
 def _follow_merges(conn: sqlite3.Connection, name: str) -> str:

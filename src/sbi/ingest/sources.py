@@ -30,10 +30,10 @@ class NvrRtspSource:
         # Must be set before the capture is opened (read by OpenCV's FFmpeg backend).
         os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{self.cfg.rtsp_transport}"
         where = rtsp_url(self._creds, space.camera, redact=True)
-        cap = cv2.VideoCapture(rtsp_url(self._creds, space.camera), cv2.CAP_FFMPEG)
         timeout_ms = int(self.cfg.timeout_s * 1000)
-        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms)
-        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms)
+        # the timeouts are open-time options: they only take effect when passed with the open call
+        cap = cv2.VideoCapture(rtsp_url(self._creds, space.camera), cv2.CAP_FFMPEG,
+                               [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms, cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms])
         try:
             if not cap.isOpened():
                 raise CameraError(f"cannot open stream {where}")

@@ -10,6 +10,7 @@ the once-a-minute refresh are cheap.
 from __future__ import annotations
 
 import os
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from sbi.forecast.accuracy import by_lead, by_target, by_weekday, live_points, o
 from sbi.forecast.build import table_for
 from sbi.settings import load_settings
 from sbi.spaces import discover_space_files, load_space
+from sbi.timeutil import get_zone
 
 INK, MUTED, BLUE, GRID, SLATE = "#2f2f2c", "#a3a29a", "#2a78d6", "#e6e5e0", "#52514e"
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6"]       # one colour per headline series: its tile and its chart
@@ -197,7 +199,7 @@ def headline(space, run: dict | None, table: pd.DataFrame) -> list[str]:
 try:
     settings, spaces = _setup()
     data.connect_readonly(settings.db_path).close()            # fail here, with a clear message, if it cannot open
-except (SbiError, OSError) as e:
+except (SbiError, OSError, sqlite3.Error) as e:
     st.error(f"Setup problem: {e}")
     st.stop()
 
@@ -223,7 +225,10 @@ def page() -> None:
 
 def _page(conn) -> None:
     clock = datetime.now(timezone.utc)
-    local = clock.astimezone(table_tz(next(iter(spaces.values()))))
+    local = clock.astimezone(get_zone(settings.timezone))
+    if not spaces:
+        st.info("No space files in config/spaces/.")
+        return
     st.markdown(header(data.header_status(conn, list(spaces.values()), clock), local), unsafe_allow_html=True)
     top = st.columns([3, 2])
     space_id = top[0].radio("Space", list(spaces), index=first_space, horizontal=True, label_visibility="collapsed",
@@ -255,13 +260,14 @@ def _page(conn) -> None:
                            "ORDER BY ts_utc DESC LIMIT 1", (space_id,)).fetchone()
         if row and (settings.root / row["image_path"]).exists():
             left.image(str(settings.root / row["image_path"]), width="stretch")
-        sm = data.summary(table, forecast, heads)
+        step = int(run["step_minutes"]) if run else settings.table.step_minutes
+        sm = data.summary(table, forecast, heads, step_minutes=step)
         tiles = right.columns(max(len(sm), 1))
         colour = {t: SERIES[i] for i, t in enumerate(heads[:len(SERIES)])}      # fixed per space, not per selection
         for where, r in zip(tiles, sm.itertuples(index=False)):
             note = None if pd.isna(r.usual) else f"{'+' if r.now >= r.usual else ''}{num(r.now - r.usual, r.column)} vs usual {num(r.usual, r.column)}"
             tile(where, r.series, num(r.now, r.column), note, colour.get(r.column, SLATE))
-        allsm = data.summary(table, forecast, targets or heads)
+        allsm = data.summary(table, forecast, targets or heads, step_minutes=step)
         if not allsm.empty:
             cols_ = allsm["column"]
             show = pd.DataFrame({"series": allsm["series"], "now": [num(v, c_) for v, c_ in zip(allsm["now"], cols_)],
@@ -373,7 +379,8 @@ def _page(conn) -> None:
             st.code("\n".join(problems))
 
     with t_all:
-        dims = data.dimensions(table, catalog, run, forecast)
+        dims = data.dimensions(table, catalog, run, forecast,
+                               step_minutes=int(run["step_minutes"]) if run else settings.table.step_minutes)
         for col in ("now", "usual now", "min", "max", "+1 h forecast"):
             dims[col] = pd.to_numeric(dims[col], errors="coerce").map(lambda v: v if pd.isna(v) else float(f"{v:.4g}"))
         dims["now (text)"] = dims["now (text)"].fillna("")
@@ -402,10 +409,6 @@ def _page(conn) -> None:
                 st.markdown(KEY, unsafe_allow_html=True)
                 st.altair_chart(series_figure(cd, data.label(one), now, height=300), width="stretch")
 
-
-def table_tz(space):
-    from sbi.timeutil import get_zone
-    return get_zone(space.tz)
 
 
 page()

@@ -3,7 +3,9 @@
 Photos: every second admin-cabin photo plus every hand-labelled photo. Then run score.py to compare candidates.
 
 usage:  .venv/bin/python scripts/detector_bench/bench.py NAME      -> data/exports/detector_bench/NAME.json
-NAME:   <weights>@<input size>[+tta][+clahe]   for YOLO weights in models/, e.g. yolo26x@1280, yolo12x@1920+tta
+NAME:   <weights>@<input size>[+tta][+clahe]   for YOLO weights in models/ (yolo26x, yolo12x, yolo11x),
+                                               e.g. yolo26x@1280, yolo12x@1920+tta
+        <weights>@<input size>+tile             whole photo plus overlapping halves (ignores +tta and +clahe)
         rtdetr-x@1280 | yoloe-26x-seg@1280[+p2] (text prompts) | gdino | owlv2 (Hugging Face models)"""
 import json, sqlite3, sys, time
 from pathlib import Path

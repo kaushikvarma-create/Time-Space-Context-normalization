@@ -36,7 +36,8 @@ def summarise(df: pd.DataFrame, by: list[str]) -> pd.DataFrame:
     return out.round(2).reset_index()
 
 
-def report(conn: sqlite3.Connection, *, mask_dup_iou: float = 0.5) -> str:
+def report(conn: sqlite3.Connection, *, mask_dup_iou: float = 0.5, **threshold_kw) -> str:
+    """`threshold_kw` go to eval.thresholds.report (the counting rule and thresholds in use)."""
     from .thresholds import report as threshold_report
     df = load_labelled(conn)
     if df.empty:
@@ -46,5 +47,5 @@ def report(conn: sqlite3.Connection, *, mask_dup_iou: float = 0.5) -> str:
             f"{summarise(df, ['space_id', 'object_type']).to_string(index=False)}\n\n"
             f"== people by part of day (look for night/low-light bias)\n"
             f"{summarise(df[df.object_type == 'person'], ['space_id', 'part_of_day']).to_string(index=False)}")
-    extra = threshold_report(conn, min_iou=mask_dup_iou)
+    extra = threshold_report(conn, min_iou=mask_dup_iou, **threshold_kw)
     return text + ("\n\n" + extra if extra else "")

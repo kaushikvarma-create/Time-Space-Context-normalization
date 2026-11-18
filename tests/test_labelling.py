@@ -123,3 +123,19 @@ def test_eval_report_includes_the_threshold_section(conn, parking, root):
     labelled(conn, parking, root, BIKES, {"motorcycle": 4, "person": 0}, n=thresholds.MIN_LABELS)
     text = vlm_eval.report(conn)
     assert "detector threshold per object type" in text and "class_conf: {motorcycle: 0.10}" in text
+
+
+def test_recommendation_follows_the_counting_rule_and_thresholds_in_use(conn, parking, root):
+    labelled(conn, parking, root, BIKES, {"motorcycle": 4, "person": 0}, n=thresholds.MIN_LABELS)
+    scores = thresholds.score(thresholds.sweep(conn))
+    rec = thresholds.recommend(scores, rule="yolo", class_conf={"motorcycle": 0.10}).set_index("object_type")
+    assert rec.loc["motorcycle", "current"] == "yolo@0.10" and "keep" in rec.loc["motorcycle", "why"]
+    assert thresholds.class_conf_suggestion(rec.reset_index()) == {}                 # already set: nothing to suggest
+    out = thresholds.recommend(scores, rule="outline").set_index("object_type")   # these photos have no outlines:
+    assert out.loc["person", "current"] == "outline@0.25" and np.isnan(out.loc["motorcycle", "current_mae"])
+    assert out.loc["motorcycle", "recommended"] == "yolo@0.10"                     # so only the other rule is left
+    assert thresholds.class_conf_suggestion(out.reset_index(), rule="outline") == {}
+    text = thresholds.report(conn, outline_counting=True, class_conf={"motorcycle": 0.10})
+    assert "the pipeline counts with outline@" in text and "use the table column" not in text
+    plain = thresholds.report(conn, table_levels=())
+    assert "add 0." not in plain or "table.conf_levels" in plain

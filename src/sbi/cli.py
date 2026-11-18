@@ -16,7 +16,7 @@
   table       build the Chronos-ready table + column catalog for a space (CSV in data/exports/)
   stability   label-free noise check: how steady each count is inside a quiet window (e.g. night)
 
-Exit codes: 0 ok, 1 some spaces failed, 2 fatal setup/config error.
+Exit codes: 0 ok, 1 some spaces failed (or an unexpected error escaped), 2 fatal setup/config error.
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("migrate")
     b = sub.add_parser("baseline"); b.add_argument("--space")
     r = sub.add_parser("reprocess"); r.add_argument("--space", required=True)
-    r.add_argument("--frame-id", type=int, action="append", help="repeatable; default: all processed frames")
+    r.add_argument("--frame-id", type=int, action="append", help="repeatable; default: every captured frame of the space")
     r.add_argument("--no-vlm", action="store_true")
     r.add_argument("--detector-only", action="store_true", help="keep the stored VLM answer; no VLM call")
     sub.add_parser("eval")
@@ -122,11 +122,12 @@ def main(argv: list[str] | None = None) -> int:
                 space = _spaces_by_id(settings.root).get(args.space)
                 if space is None:
                     raise SbiError(f"unknown space {args.space!r}")
+                if args.detector_only and args.no_vlm:
+                    raise SbiError("--detector-only keeps the stored VLM answers; it cannot be combined with --no-vlm")
+                # image vectors and description scores are kept as stored; `sbi embed` / `sbi score` fill gaps
                 detector = build_detector(settings.detector, settings.root)
                 segmenter = build_segmenter(settings.segmenter, settings.root)    # SegmenterError: stop, do not
                                                                                   # silently wipe stored outlines
-                if args.detector_only and args.no_vlm:
-                    raise SbiError("--detector-only keeps the stored VLM answers; it cannot be combined with --no-vlm")
                 reader = None if args.no_vlm else build_scene_reader(settings.scene_reader)
                 ids = args.frame_id or [r[0] for r in conn.execute(
                     "SELECT frame_id FROM frames WHERE space_id=? AND capture_status='ok' ORDER BY ts_utc",
@@ -249,7 +250,10 @@ def main(argv: list[str] | None = None) -> int:
                 if rep.failed:
                     return 1
             elif args.cmd == "eval":
-                print(report(conn, mask_dup_iou=settings.table.mask_dup_iou))
+                d = settings.detector
+                print(report(conn, mask_dup_iou=settings.table.mask_dup_iou, outline_counting=d.dedupe_outline_iou > 0,
+                             default_conf=d.conf, class_conf=dict(d.class_conf),
+                             table_levels=tuple(settings.table.conf_levels)))
             elif args.cmd == "curate":
                 from .curation.curator import curate
                 from .curation.services import LmStudioEmbedder, LmStudioJudge

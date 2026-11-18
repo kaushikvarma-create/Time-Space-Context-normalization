@@ -23,22 +23,32 @@ def counts(boxes, label, thr, dedupe=0.6):
         if not any(iou(k, box) > dedupe for k in kept): kept.append(box)
     return len(kept)
 
-rows = []
+def truth_chairs(fid):
+    """7 chairs in the cabin, unless a person counted that photo's chairs."""
+    return LAB.get(fid, {}).get("chair", 7)
+
+
+rows, test, night = [], [], np.array([], bool)
 for f in sorted(OUT.glob("*.json")):
     res = json.loads(f.read_text())
     cab = [(fid, r) for fid, r in res.items() if r["space"] == "admin_cabin"]
     tune, test = cab[0::2], cab[1::2]
-    best = min(THR, key=lambda t: np.mean([abs(counts(r["boxes"], "chair", t) - 7) for _, r in tune]))
+    best = min(THR, key=lambda t: np.mean([abs(counts(r["boxes"], "chair", t) - truth_chairs(fid)) for fid, r in tune]))
+    true = np.array([truth_chairs(fid) for fid, _ in test])
     got = np.array([counts(r["boxes"], "chair", best) for _, r in test]); night = np.array([(r["brightness"] or 200) < 95 for _, r in test])
     at25 = np.array([counts(r["boxes"], "chair", 0.25) for _, r in test])
-    row = {"detector": f.stem, "chair thr": best, "chairs =7": (got == 7).mean(), "within 1": (abs(got - 7) <= 1).mean(), "avg miss": abs(got - 7).mean(),
-           "=7 day": (got[~night] == 7).mean(), "=7 night": (got[night] == 7).mean(), "min": got.min(), "max": got.max(), "=7 @0.25": (at25 == 7).mean()}
+    row = {"detector": f.stem, "chair thr": best, "chairs =7": (got == true).mean(), "within 1": (abs(got - true) <= 1).mean(),
+           "avg miss": abs(got - true).mean(), "=7 day": (got[~night] == true[~night]).mean(),
+           "=7 night": (got[night] == true[night]).mean(), "min": got.min(), "max": got.max(), "=7 @0.25": (at25 == true).mean()}
     for typ in ("person", "monitor", "laptop", "bag", "car", "motorcycle"):
         lab = [(fid, LAB[fid][typ]) for fid in res if fid in LAB and typ in LAB[fid]]
-        thr = 0.25 if typ != "monitor" else min(THR, key=lambda t: np.mean([abs(counts(res[fid]["boxes"], typ, t) - n) for fid, n in lab]))
+        thr = 0.25          # one fixed threshold: too few labels to tune one and still score it fairly
         err = [abs(counts(res[fid]["boxes"], typ, thr) - n) for fid, n in lab]
         row[f"{typ} miss"] = np.mean(err) if err else np.nan
     rows.append(row)
 pd.set_option("display.width", 250); pd.set_option("display.max_columns", 30)
 print(pd.DataFrame(rows).sort_values("avg miss").round(2).to_string(index=False))
-print("photos scored for chairs:", len(test), " night:", int(night.sum()), " labelled photos:", len(LAB))
+if rows:
+    print("photos scored for chairs (last candidate):", len(test), " night:", int(night.sum()), " labelled photos:", len(LAB))
+else:
+    print(f"no candidate results in {OUT}: run bench.py first")

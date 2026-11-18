@@ -193,9 +193,9 @@ def _write(conn, space: SpaceConfig, frame, all_detections: list[Detection], rea
                                    raw_label="person", count=people_vlm, status=postures.most_common(1)[0][0] if postures else None,
                                    attrs={"people": list(reading.people)})
         for o in reading.objects:
-            if o.label.strip().lower() in ("person", "people"):
-                continue                              # already stored from the structured people list
             label, _ = canonical(conn, o.label, space_id=sid, frame_id=fid, ts_utc=ts)
+            if label == person:
+                continue                              # any name for a person: already stored from the people list
             results.insert_observation(conn, frame_id=fid, space_id=sid, ts_utc=ts, object_type=label,
                                        source="vlm", raw_label=o.label, count=o.count, status=o.status)
         for r in reading.relations:                             # relationships read from the photo

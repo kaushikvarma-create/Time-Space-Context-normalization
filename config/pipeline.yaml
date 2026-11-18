@@ -1,12 +1,12 @@
 # Global pipeline settings. Per-space settings live in config/spaces/*.yaml.
 # Secrets (NVR user/password) are never here: they come from .env / the environment.
 # Env overrides: SBI_LMSTUDIO_URL, SBI_VLM_MODEL, SBI_NVR_HOST, SBI_NVR_PORT, SBI_NVR_USER, SBI_NVR_PASS
-timezone: Asia/Kolkata          # IST. Used for logs and as the default for spaces
+timezone: Asia/Kolkata          # IST, for logs. Each space has its own `tz` (default Asia/Kolkata)
 
 paths:                          # relative to the project root
   db: data/sbi.db
   images: data/images
-  logs: data/logs
+  logs: data/logs               # read by the dashboard; scripts/tick.sh always writes data/logs/tick.log
   cache: data/cache             # derived per-photo table columns; safe to delete, rebuilt when needed
 
 frame_source:                   # kind: nvr_rtsp

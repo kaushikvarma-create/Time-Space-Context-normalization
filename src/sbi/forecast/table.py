@@ -36,7 +36,7 @@ Image-vector columns, when an embedder ran (see forecast/embed_features.py):
   emb.<model>.pc1..pcN   position along the main directions in which the scene varies (N = embed_components)
   emb.<model>.drift_prev / drift_typical   change since the previous slot / distance from the typical scene
 They need no detector and no VLM, so they exist for every embedded frame. NaN for frames never embedded.
-The principal directions are fit on `embed_fit_end` and earlier when given, otherwise on the whole table.
+The principal directions are fit on the slots before `embed_fit_end` when given, otherwise on the whole table.
 
 Probe columns, when a scorer ran (see forecast/probe_features.py):
   probe.<scorer>.<concept>   mean raw score of the concept's paraphrased prompts (SigLIP: a logit, 0 = even odds)
@@ -95,13 +95,17 @@ class TableResult:
     cal: CalendarSpec = CalendarSpec()    # holidays / working days, so future calendar rows match the table's
 
 
-def calendar(index: pd.DatetimeIndex, spec: CalendarSpec = CalendarSpec()) -> pd.DataFrame:
-    """Calendar columns, all known in advance. is_holiday / is_working_day come from the site calendar."""
+def calendar(index: pd.DatetimeIndex, spec: CalendarSpec = CalendarSpec(), step_minutes: int | None = None) -> pd.DataFrame:
+    """Calendar columns, all known in advance. is_holiday / is_working_day come from the site calendar.
+    cal.slot_of_day counts steps of `step_minutes` (default: the index's own spacing, else 15)."""
+    if step_minutes is None:
+        freq = getattr(index, "freq", None)
+        step_minutes = int(pd.Timedelta(freq).total_seconds() // 60) if freq is not None else 15
     holiday = np.array([d in spec.holidays for d in index.date], dtype=bool)
     working = np.isin(index.dayofweek, sorted(spec.working_days)) & ~holiday
     return pd.DataFrame({
         "cal.hour": index.hour, "cal.minute_of_day": index.hour * 60 + index.minute, "cal.dow": index.dayofweek,
-        "cal.is_weekend": (index.dayofweek >= 5).astype(int), "cal.slot_of_day": (index.hour * 60 + index.minute) // 15,
+        "cal.is_weekend": (index.dayofweek >= 5).astype(int), "cal.slot_of_day": (index.hour * 60 + index.minute) // step_minutes,
         "cal.is_holiday": holiday.astype(int), "cal.is_working_day": working.astype(int),
     }, index=index)
 
@@ -125,8 +129,9 @@ def _name(tax: Taxonomy, raw: str | None, fallback: str) -> str:
     return (tax.lookup(raw) if raw else None) or fallback
 
 
-FEATURES_VERSION = 1          # bump when frame_columns() changes what it computes: old cache entries then miss
+FEATURES_VERSION = 2          # bump when frame_columns() changes what it computes: old cache entries then miss
 _SQL_BATCH = 500              # ids per SQL statement (SQLite limits bound variables)
+CORRUPT_OUTLINE = "_corrupt_outline"   # marker in frame_columns() output: the photo's outlines could not be read
 
 
 def frame_columns(conn: sqlite3.Connection, tax: Taxonomy, frame_ids: list[int], *, conf_levels: tuple[float, ...],
@@ -136,6 +141,7 @@ def frame_columns(conn: sqlite3.Connection, tax: Taxonomy, frame_ids: list[int],
     count.* rollup.* cell.* area.* cellarea.* rel.*  ({frame_id: {column: value}}). A photo with nothing stored gets
     an empty dict. Pure function of the stored rows, the vocabulary links and the arguments."""
     out: dict[int, dict[str, float]] = {int(f): defaultdict(float) for f in frame_ids}
+    corrupt: set[int] = set()
     for start in range(0, len(frame_ids), _SQL_BATCH):
         ids = [int(f) for f in frame_ids[start:start + _SQL_BATCH]]
         marks = ",".join("?" * len(ids))
@@ -162,8 +168,15 @@ def frame_columns(conn: sqlite3.Connection, tax: Taxonomy, frame_ids: list[int],
                 if conf >= lv:
                     out[fid][f"count.{level_source(lv)}.{name}"] += 1
                     boxes[(level_source(lv), name, fid)].append(json.loads(bbox))
-            if mask is not None:
-                outlines[fid].append((name, conf, bool(counted), decode_mask(mask)))
+            if mask is not None and fid not in corrupt:
+                try:
+                    outlines[fid].append((name, conf, bool(counted), decode_mask(mask)))
+                except ValueError as e:         # one unreadable outline: this photo's outline columns are unknown
+                    log.warning("frame %d: unreadable stored outline (%s); its outline columns are left empty", fid, e)
+                    corrupt.add(fid)
+        for fid in corrupt:
+            outlines.pop(fid, None)
+            out[fid][CORRUPT_OUTLINE] = 1.0
         for fid, masked in outlines.items():
             for col, value in mask_features(masked, sources=mask_sources, min_iou=mask_dup_iou, grid=grid,
                                             cell_min=cell_area_min).items():
@@ -209,8 +222,9 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     the newest that many slots (after `start`/`end`), for callers that cannot use more history than that."""
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
-    index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
-                          pd.Timestamp(end) if end else frames.index.max(), freq=f"{step_minutes}min", name="timestamp")
+    step = f"{step_minutes}min"                   # start / end are floored to the slot grid the frames are on
+    index = pd.date_range(pd.Timestamp(start).floor(step) if start else frames.index.min(),
+                          pd.Timestamp(end).floor(step) if end else frames.index.max(), freq=step, name="timestamp")
     if max_slots is not None and len(index) > max_slots:
         index = index[-max_slots:]
     t = pd.DataFrame(index=index)
@@ -225,8 +239,6 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     level_ok = {level_source(lv): valid & (floor <= lv + 1e-9) for lv in conf_levels}   # was the frame read that low?
     outlined = valid & frames["segmenter_version"].notna().reindex(index, fill_value=False)
     mask_sources: dict[str, float | None] = {"sam2": None, **{level_source(lv, "sam2"): lv for lv in conf_levels}}
-    source_ok = {**level_ok, "sam2": outlined,
-                 **{level_source(lv, "sam2"): outlined & level_ok[level_source(lv)] for lv in conf_levels}}
 
     fid_slot = {int(fid): slot for slot, fid in t.loc[valid, "frame_id"].items()}
     stamps = {int(fid): str(frames["processed_utc"].get(slot)) for slot, fid in t.loc[valid, "frame_id"].items()}
@@ -236,8 +248,13 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
     blocks: dict[str, dict] = defaultdict(dict)                              # column -> {slot: value}
     for fid, cols in per_frame.items():
         slot = fid_slot[fid]
+        if cols.get(CORRUPT_OUTLINE):
+            outlined.loc[slot] = False           # unreadable outlines: the photo counts as not outlined
         for col, value in cols.items():
-            blocks[col][slot] = value
+            if col != CORRUPT_OUTLINE:
+                blocks[col][slot] = value
+    source_ok = {**level_ok, "sam2": outlined,
+                 **{level_source(lv, "sam2"): outlined & level_ok[level_source(lv)] for lv in conf_levels}}
 
     # keep only roll-ups for names that actually have is_a descendants (otherwise they duplicate count.*)
     has_children = {p for parents in tax.parents.values() for p in parents}

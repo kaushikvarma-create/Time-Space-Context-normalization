@@ -25,7 +25,7 @@ from .spaces import SpaceConfig, load_space
 from .store.db import connect, migrate
 from .store.frames import pending_frame_ids
 from .store.registry import register_space
-from .timeutil import now_utc, time_dims
+from .timeutil import now_utc
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class SpaceOutcome:
     capture_status: str | None = None
     processed: int = 0
     error: str | None = None
+    failed: int = 0               # frames that could not be processed this tick (left queued)
 
 
 def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource | None = None,
@@ -45,7 +46,10 @@ def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource
              now: datetime | None = None, segmenter: Segmenter | None = None,
              embedder: Embedder | None = None, scorer: Scorer | None = None,
              forecaster: Forecaster | None = None) -> list[SpaceOutcome]:
-    """Components can be injected (tests, alternative implementations); otherwise built from settings."""
+    """Components can be injected (tests, alternative implementations); otherwise built from settings.
+    `now` fixes the capture time of every space (tests); by default each photo is timed when it is taken, and the
+    tick start decides whether forecasts are due."""
+    capture_at = now
     now = now or now_utc()
     conn = connect(settings.db_path)
     try:
@@ -89,7 +93,7 @@ def run_tick(settings: Settings, space_files: list[Path], *, source: FrameSource
                 log.error("scorer unavailable, frames will be stored without probe scores: %s", e)
 
         for space in spaces:
-            outcomes.append(_run_space(conn, settings, space, source, detector, reader, now, segmenter, embedder,
+            outcomes.append(_run_space(conn, settings, space, source, detector, reader, capture_at, segmenter, embedder,
                                        scorer))
         _forecasts(conn, settings, spaces, now, forecaster)
         return outcomes
@@ -109,11 +113,13 @@ def _forecasts(conn, settings: Settings, spaces: list[SpaceConfig], now: datetim
 
 
 def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource, detector: Detector | None,
-               reader: SceneReader | None, now: datetime, segmenter: Segmenter | None = None,
+               reader: SceneReader | None, now: datetime | None, segmenter: Segmenter | None = None,
                embedder: Embedder | None = None, scorer: Scorer | None = None) -> SpaceOutcome:
+    """The space is ok when its photo was captured (or the camera failure recorded) and that photo, if any, was
+    processed. Backlog frames that fail stay queued and are counted in `failed` without failing the space."""
     try:
         cap = capture_frame(conn, space, source, root=settings.root, image_dir=settings.image_dir, now=now)
-        processed = 0
+        processed, failed, current_failed, done = 0, 0, False, []
         if detector is not None:
             todo = [cap.frame_id] if cap.status == "ok" else []
             todo += [i for i in pending_frame_ids(conn, space.space_id, settings.processing.backlog_limit)
@@ -125,22 +131,29 @@ def _run_space(conn, settings: Settings, space: SpaceConfig, source: FrameSource
                                         dedupe_outline_iou=settings.detector.dedupe_outline_iou)
                 except DetectorError as e:
                     log.error("%s frame %d: detector failed, leaving it queued: %s", space.space_id, fid, e)
+                    failed += 1
+                    current_failed = current_failed or fid == cap.frame_id
                     break                    # do not hammer a broken detector with the rest of the backlog
                 except SbiError as e:
                     log.error("%s frame %d: processing failed, leaving it queued: %s", space.space_id, fid, e)
+                    failed += 1
+                    current_failed = current_failed or fid == cap.frame_id
                     continue
                 if res.processed:
                     processed += 1
+                    done.append(fid)
                     log.info("%s frame %d: people yolo=%s vlm=%s boxes=%d stored=%d%s%s%s%s", space.space_id, fid,
                              res.people_yolo, res.people_vlm, res.boxes, res.boxes_stored,
                              "" if res.vlm_ok else " (no VLM)",
                              "" if res.masks_ok or segmenter is None else " (no outlines)",
                              "" if res.embedded or embedder is None else " (no image vector)",
                              "" if res.scored or scorer is None or not space.probes else " (no probe scores)")
-        if processed:
-            d = time_dims(now, space.tz)
-            baseline.rebuild(conn, space.space_id, alpha=settings.baseline.ewm_alpha, dow=d.dow, hour=d.hour)
-        return SpaceOutcome(space.space_id, True, cap.frame_id, cap.status, processed)
+        if done:                                 # the (weekday, hour) bucket of every frame processed, backlog included
+            marks = ",".join("?" * len(done))
+            for dow, hour in conn.execute(f"SELECT DISTINCT dow, hour FROM frames WHERE frame_id IN ({marks})", done):
+                baseline.rebuild(conn, space.space_id, alpha=settings.baseline.ewm_alpha, dow=dow, hour=hour)
+        error = f"frame {cap.frame_id} could not be processed (see the log)" if current_failed else None
+        return SpaceOutcome(space.space_id, not current_failed, cap.frame_id, cap.status, processed, error, failed)
     except SbiError as e:
         log.error("%s: tick failed: %s", space.space_id, e)
         return SpaceOutcome(space.space_id, False, error=str(e))

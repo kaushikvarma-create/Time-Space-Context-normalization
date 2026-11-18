@@ -29,8 +29,8 @@ def build_detections(raw: list[RawBox], space: SpaceConfig, cfg: DetectorSetting
         label = space.detector_map.get(cls_name)
         if label is None:   # class not whitelisted for this space: noise (e.g. refrigerator in a car park)
             continue
-        dets.append(Detection(label, round(float(conf), 3), tuple(round(v, 4) for v in xyxyn),
-                              counted=float(conf) >= cfg.count_threshold(label)))
+        conf = round(float(conf), 3)        # decide on the stored value, so `counted` always agrees with it
+        dets.append(Detection(label, conf, tuple(round(v, 4) for v in xyxyn), counted=conf >= cfg.count_threshold(label)))
     dets = dedupe_same_label_iou(dets, cfg.dedupe_same_label_iou)
     return dedupe_contained(dets, set(cfg.dedupe_labels), cfg.dedupe_containment)
 
