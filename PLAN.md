@@ -567,3 +567,16 @@ photos and reported on the other half (123 photos, 70 of them at night).
 - Forecast runs made before their history was re-read (the detector switch) are no longer scored: 45 cabin and 44
   parking runs left out; live scoring restarts at run 90 / 91.
 - Next checks: Sat 21 Nov and Mon 23 Nov forecasts. With a month of data, fine-tune Chronos-2 on this site.
+
+## 2026-11-18: Speed, service, counting
+
+- Table build: each photo's derived columns are cached in `data/cache` (same table, 4.8 s -> 0.6 s). Live forecasts
+  and the dashboard use the newest `forecast.max_context` slots (8192).
+- Dashboard runs as a user service (`scripts/install-dashboard-service.sh`); it restarts itself and starts at boot.
+- Counting: duplicate outlines removed in the counting step (`detector.dedupe_outline_iou: 0.5`); chairs and
+  motorcycles counted from confidence 0.10. Chairs exactly 7 in 84.6% of cabin photos (was 80.1%; range 6-9, was 3-8;
+  7 of 7 labelled photos exact). Motorcycle miss on labels 3.18 -> 2.00, bias -2.27 -> +0.18. People, cars, laptops
+  unchanged. Cabin: suitcase counted as bag (bag miss 0.57 -> 0.43). Parking now also counts chairs, bottles, bags.
+  Tiled detection was tested and rejected (hurt people and chairs). All stored photos re-read; backup
+  `data/backups/sbi-before-outline-dedupe.db`.
+- Weekday knowledge: not done. Fine-tuning Chronos-2 on 5 days was started and stopped; revisit with a month of data.

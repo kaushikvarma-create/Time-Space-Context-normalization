@@ -123,11 +123,11 @@ against re-read photos; the dashboard not noticing re-read photos.
 
 | # | What | Why it matters | Needs |
 |---|---|---|---|
-| 1 | The table is rebuilt from raw readings every time | 5 s now for the cabin, about 1 s per 100 slots: half a minute at one month, over a minute at 85 days, on every hourly forecast and every dashboard refresh after a new photo | Store per-photo outline features once (the `frame_features` table exists and is empty), or cap history at the 8,192 slots Chronos-2 can read |
+| 1 | DONE 18 Nov (cached, 0.6 s): the table was rebuilt from raw readings every time | 5 s now for the cabin, about 1 s per 100 slots: half a minute at one month, over a minute at 85 days, on every hourly forecast and every dashboard refresh after a new photo | Store per-photo outline features once (the `frame_features` table exists and is empty), or cap history at the 8,192 slots Chronos-2 can read |
 | 2 | Forecasts do not know weekdays | Monday after a weekend is forecast as empty | Weeks of history; then fine-tune Chronos-2 on this site (about a month of data) |
 | 3 | One chair in five photos is still missed | Hidden behind a person or bag | A detector trained on these two camera views; needs boxes drawn on a few hundred photos |
 | 4 | Photos and database exist only on this PC | A disk failure loses everything | A copy to another machine or drive; your decision where |
-| 5 | The dashboard is not a service | It stops when WSL restarts and must be started by hand | A systemd user service; needs your approval because it is a persistent job |
+| 5 | DONE 18 Nov (user service): the dashboard was not a service | It stops when WSL restarts and must be started by hand | A systemd user service; needs your approval because it is a persistent job |
 | 6 | Live accuracy reads every stored forecast | About 87,000 forecast rows are added per day; the accuracy tab will slow down over months | Score only the last 30 days by default |
 | 7 | Some forecast series repeat others | `count.yolo.person` is the same as `scene.people_yolo` | Trim `forecast_targets` in the space files |
 | 8 | Holiday list has 3 dates | The working-day flag is wrong on office holidays | Paste the office list into `config/site_calendar.yaml` |
