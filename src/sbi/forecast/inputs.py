@@ -11,9 +11,9 @@ from fnmatch import fnmatchcase
 import pandas as pd
 
 from ..errors import ForecastError
-from ..settings import ForecastSettings, TableSettings
+from ..settings import ALL_KINDS, ForecastSettings, TableSettings
 from .models import Forecaster, qname
-from .table import TableResult, select_covariates, to_chronos
+from .table import TableResult, all_covariates, select_covariates, to_chronos
 
 log = logging.getLogger(__name__)
 NONNEGATIVE_KINDS = {"scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img"}   # counts, shares, image stats
@@ -59,7 +59,9 @@ def prepare(result: TableResult, space_id: str, patterns: list[str], kinds: list
     targets = resolve_targets(patterns, result.catalog, settings.max_targets)
     past_kinds = [k for k in kinds if k != "cal"]
     covariates: list[str] = []
-    if past_kinds:
+    if ALL_KINDS in past_kinds:                       # everything the pipeline extracted, uncapped
+        covariates = all_covariates(result.catalog, targets=targets)
+    elif past_kinds:
         covariates = select_covariates(result.catalog, targets=targets, max_covariates=table_settings.max_covariates,
                                        always=table_settings.always_include, min_autocorr=table_settings.min_autocorr,
                                        autocorr_min_slots=table_settings.autocorr_min_slots, kinds=past_kinds)

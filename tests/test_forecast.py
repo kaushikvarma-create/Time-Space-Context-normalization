@@ -17,7 +17,7 @@ from sbi.forecast.models import Chronos2Forecaster, Persistence, SeasonalMean, S
 from sbi.forecast.runner import forecast_space
 from sbi.forecast.table import TableResult, build_catalog, calendar
 from sbi.pipeline import process_frame
-from sbi.settings import ForecastSettings, TableSettings
+from sbi.settings import ALL_KINDS, ForecastSettings, TableSettings
 from sbi.spaces import SpaceConfig
 from sbi.store.db import connect, migrate
 from sbi.store.forecasts import insert_forecasts, insert_run, latest_run, load_forecast
@@ -87,7 +87,8 @@ class SpyForecaster:
 
 # ---------------------------------------------------------------- settings and config
 def test_forecast_settings_rules():
-    assert FS.variant == "calendar" and FS.variants["univariate"] == [] and "emb" in FS.variants["full"]
+    assert FS.variant == "all" and FS.variants["univariate"] == [] and "emb" in FS.variants["full"]
+    assert FS.variants["all"] == ["cal", ALL_KINDS]
     for bad in ([0.1, 0.9], [0.5, 0.1], [0.0, 0.5], [0.5, 1.0], [0.125, 0.5, 0.9], []):
         with pytest.raises(ValidationError):
             ForecastSettings(quantiles=bad)
@@ -230,6 +231,19 @@ def test_variants_decide_which_inputs_exist():
     full = prep(["cal", "scene", "count", "area", "img", "cat", "emb", "probe"], patterns=("scene.people_yolo",))
     assert "emb.m.pc1" in full.covariates and "probe.m.people" in full.covariates
     assert full.context["cat.lighting"].dtype == object                                  # categorical stays text
+
+
+def test_all_variant_gives_every_model_ready_column_uncapped():
+    result = result_for(make_table())
+    cat = result.catalog
+    ts = TS.model_copy(update={"max_covariates": 1, "min_autocorr": 0.99})            # caps that `all` must ignore
+    p = prepare(result, "s", ["scene.people_yolo"], ["cal", ALL_KINDS], horizon=4, settings=FS, table_settings=ts)
+    ready = set(cat.loc[cat["model_ready"] & (cat["kind"] != "cal"), "column"]) - {"scene.people_yolo"}
+    assert set(p.covariates) == ready and len(p.covariates) == len(ready) and p.calendar
+    assert "count.yolo_c05.chair" in p.covariates and "emb.m.pc1" in p.covariates and "cat.lighting" in p.covariates
+    assert "count.yolo.flat" not in p.covariates                                      # not model-ready (constant)
+    assert not [c for c in p.covariates if c.startswith("cal.")]                       # calendar goes in separately
+    assert set(p.covariates) <= set(p.context.columns)
 
 
 class Negative:
@@ -392,7 +406,7 @@ def live(conn, space, df=None, forecaster=None, **kw):
 
 
 def test_live_forecast_stores_the_run_with_the_inputs_it_used(conn, space):
-    run = live(conn, space)
+    run = live(conn, space, variant="calendar")
     row = conn.execute("SELECT * FROM forecast_runs WHERE run_id=?", (run.run_id,)).fetchone()
     assert (row["model"], row["variant"], row["horizon"], row["context_slots"]) == ("spy", "calendar", 16, 200)
     assert row["origin_local"] == "2026-11-14T01:45:00"                                # slot 199 of the table
@@ -402,6 +416,10 @@ def test_live_forecast_stores_the_run_with_the_inputs_it_used(conn, space):
     detector_run = live(conn, space, variant="detector", horizon=4)
     assert json.loads(conn.execute("SELECT covariates_json FROM forecast_runs WHERE run_id=?", (detector_run.run_id,)).fetchone()[0])[-1] == "cal.*"
     assert detector_run.covariates and len(detector_run.forecast) == len(detector_run.targets) * 4
+    all_run = live(conn, space, horizon=4)                                             # the default: everything
+    stored = json.loads(conn.execute("SELECT covariates_json, variant FROM forecast_runs WHERE run_id=?",
+                                     (all_run.run_id,)).fetchone()[0])
+    assert stored == all_run.covariates + ["cal.*"] and len(all_run.covariates) > len(detector_run.covariates)
 
 
 def test_live_forecast_refuses_bad_requests_and_a_failed_model_stores_nothing(conn, space):

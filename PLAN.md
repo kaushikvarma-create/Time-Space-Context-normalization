@@ -481,3 +481,19 @@ Prompt skeleton (final wording to be tuned in Phase 2):
 3. Define zones and vocabulary in `config/`.
 4. Stand up Qwen via vLLM and run Pass 1/2 on 20 frames.
 5. Create `schema.sql` and a minimal ingest script.
+
+## 2026-11-18: Chronos-2 gets every extracted dimension
+
+- New covariate set `all` (now the live default): the calendar plus every model-ready column, with no cap and no smoothness filter.
+  - Admin cabin: 364 columns out of 700 extracted; the 45 forecast targets are separate.
+  - Parking: 192 columns out of 598 extracted; the 33 forecast targets are separate.
+  - Before this, live forecasts used the calendar and nothing else.
+- Probes: the admin cabin goes from 6 to 21 concepts and parking from 6 to 20, for example meeting, screens on, sunlight, full, arriving, wet and orderly. Every stored photo was scored on them, and all probes are now forecast targets.
+- Backtest, 46 origins on 5 days of data, skill vs the weekday-by-time average:
+
+  | Space       | all   | full  | calendar |
+  |-------------|-------|-------|----------|
+  | Admin cabin | 0.388 | 0.390 | 0.394    |
+  | Parking     | 0.350 | 0.349 | 0.346    |
+
+  Feeding everything costs nothing and gains nothing yet. Rerun weekly as history grows.

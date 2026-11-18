@@ -46,14 +46,14 @@ forecast:                       # `sbi forecast` / `sbi backtest`
   quantiles: [0.1, 0.5, 0.9]    # whole percents, must include 0.5 (the point forecast); stored as q10, q50, q90
   horizon: 16                   # slots ahead (16 x 15 min = 4 hours)
   min_context: 96               # slots of history required before forecasting (96 = 1 day)
-  max_targets: 40               # cap on targets per space (what to forecast is `forecast_targets` in the space file)
+  max_targets: 100              # cap on targets per space (what to forecast is `forecast_targets` in the space file)
   cross_learning: false         # let the model share information across targets in a batch (changes results)
-  variant: calendar             # covariate set for live forecasts. Not yet backed by evidence: change it only after
-                                # `sbi backtest` shows another set beating `calendar` and the weekday-by-time average
+  variant: all                  # covariate set for live forecasts: `all` = calendar + every model-ready extracted
+                                # dimension (counts, areas, cells, relations, scene fields, image stats, vectors, probes)
   every_minutes: 60             # the 15-minute tick also stores a forecast per space this often (0 = off)
   scheduled_model: chronos2     # forecaster used by the tick
   # variants: covariate sets (column kinds a model may see; cal = calendar, known in advance). Defaults:
-  #   univariate [] | calendar [cal] | detector [cal + counts, areas, cells, relations, scene fields, image stats]
+  #   all [cal + every model-ready column, uncapped] | univariate [] | calendar [cal] | detector [cal + counts, areas, cells, relations, scene fields, image stats]
   #   | full [detector + emb + probe]
 
 calendar:                       # known-in-advance day types: cal.is_holiday, cal.is_working_day

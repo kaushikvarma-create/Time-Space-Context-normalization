@@ -110,7 +110,22 @@ probes:
   dark:    ["a dark room with the lights off", "a dimly lit office at night", "an office in darkness"]
   messy:   ["a messy cluttered desk with papers", "a disorganized desk with many items", "a desk covered in clutter"]
   tidy:    ["a clean tidy desk", "a neat organized desk", "an uncluttered tidy workspace"]
+  meeting: ["a group of people having a meeting in an office", "people gathered around a table talking", "colleagues discussing together in a room"]
+  computer_work: ["a person typing on a computer at a desk", "someone working on a laptop", "people looking at computer screens"]
+  sitting:  ["people sitting on chairs in an office", "a person seated at a desk", "someone sitting down in a room"]
+  standing: ["people standing in an office", "a person standing in a room", "someone walking across an office"]
+  crowded:  ["a crowded office full of people", "many people packed in a small room", "a room with lots of people"]
+  one_person: ["a single person alone in an office", "only one person in the room", "one person working by themselves"]
+  screens_on: ["computer monitors switched on and glowing", "bright computer screens on desks", "monitors showing content"]
+  screens_off: ["computer monitors switched off and black", "dark blank computer screens", "turned off monitors on desks"]
+  sunlight: ["sunlight coming through a window into an office", "daylight in an office room", "natural light from windows"]
+  door_open: ["an office with the door open", "an open doorway in a room", "a door standing open"]
+  eating:   ["people eating food in an office", "someone having lunch at a desk", "food and drinks on an office table"]
+  phone_call: ["a person talking on a mobile phone", "someone on a phone call", "a person holding a phone to their ear"]
+  bags_on_desk: ["bags and backpacks on office desks", "a backpack placed on a chair", "handbags left on a table"]
+  cleaning: ["a cleaner cleaning an office", "someone mopping the floor", "housekeeping staff tidying a room"]
+  papers:   ["papers and documents spread on a desk", "stacks of files on a table", "paperwork on an office desk"]
 
 # What `sbi forecast` predicts: table column names or wildcards, matched against the table's model-ready columns
 # (so a new object type is picked up on its own). Threshold variants (count.yolo_c05.*) match only by exact name.
-forecast_targets: ["scene.people_yolo", "scene.people_vlm", "count.yolo.*", "area.sam2.*", "probe.*.people", "probe.*.empty"]
+forecast_targets: ["scene.people_yolo", "scene.people_vlm", "count.yolo.*", "area.sam2.*", "probe.*"]

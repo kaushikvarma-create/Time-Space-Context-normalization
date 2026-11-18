@@ -354,6 +354,14 @@ def select_covariates(catalog: pd.DataFrame, *, targets: list[str], max_covariat
     return chosen + list(rest["column"])[: max(0, max_covariates - len(chosen))]
 
 
+def all_covariates(catalog: pd.DataFrame, *, targets: list[str]) -> list[str]:
+    """Every model-ready column except the calendar and the targets: counts, areas, cells, relations, scene fields,
+    image statistics, image-vector components and probes, threshold variants included. No cap and no smoothness
+    filter: Chronos-2 attends across all of them and decides what is useful. Ordered as the table is."""
+    ready = catalog[catalog["model_ready"] & (catalog["kind"] != "cal") & ~catalog["column"].isin(targets)]
+    return list(ready["column"])
+
+
 def to_chronos(result: TableResult, space_id: str, targets: list[str], horizon: int,
                covariates: list[str] | None = None, calendar_inputs: bool = True, **select_kw) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(context_df, future_df) in the long format of Chronos2Pipeline.predict_df(id_column='id',

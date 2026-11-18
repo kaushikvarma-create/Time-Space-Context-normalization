@@ -106,7 +106,10 @@ class CalendarSettings(_Strict):
         return v
 
 
+ALL_KINDS = "*"            # in a variant: every model-ready column the pipeline extracted, no cap
+
 DEFAULT_VARIANTS: dict[str, list[str]] = {
+    "all": ["cal", ALL_KINDS],                         # calendar + every extracted dimension (live default)
     "univariate": [],                                  # the targets alone, no calendar
     "calendar": ["cal"],                               # + calendar (known in advance)
     "detector": ["cal", "scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat"],
@@ -123,7 +126,7 @@ class ForecastSettings(_Strict):
     min_context: int = Field(96, ge=8)                 # slots of history needed before forecasting (96 = 1 day)
     max_targets: int = Field(40, ge=1)                 # cap on forecast targets per space
     cross_learning: bool = False                       # let the model share information across targets (see docs)
-    variant: str = "calendar"                          # covariate set for live forecasts; change after backtests
+    variant: str = "all"                               # covariate set for live forecasts
     every_minutes: int = Field(0, ge=0)                # the tick forecasts every space this often (0 = never;
                                                        # off unless config/pipeline.yaml switches it on)
     scheduled_model: str = "chronos2"                  # forecaster the tick uses
