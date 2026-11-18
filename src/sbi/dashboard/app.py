@@ -23,8 +23,11 @@ from sbi.forecast.build import table_for
 from sbi.settings import load_settings
 from sbi.spaces import discover_space_files, load_space
 
-INK, MUTED, BLUE, GRID = "#2f2f2c", "#a3a29a", "#2a78d6", "#e6e5e0"
-STATUS = {"ok": "#cfd8e3", "not read yet": "#8c8b84", "VLM failed": "#eda100", "no photo": "#d03b3b"}
+INK, MUTED, BLUE, GRID, SLATE = "#2f2f2c", "#a3a29a", "#2a78d6", "#e6e5e0", "#52514e"
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6"]       # one colour per headline series: its tile and its chart
+GOOD, WARN, BAD = "#0ca30c", "#eda100", "#d03b3b"           # reserved for state (captured / degraded / missing)
+STATUS = {"ok": "#b5dfc0", "not read yet": "#8c8b84", "VLM failed": WARN, "no photo": BAD}
+USE_TINT = {"forecast": "#dbe9fb", "input to model": "#d9f0e6", "table only": "#f1f0ec"}
 HOURS = {"24 h": 24, "48 h": 48, "7 days": 168}
 LEADS = {"1 h ahead": 4, "2 h ahead": 8, "4 h ahead": 16}
 
@@ -77,10 +80,22 @@ def band(v, lo, hi, column: str = "") -> str:
 
 
 KEY = ("<div style='color:#52514e;font-size:0.85rem;margin:0.2rem 0 0.4rem'>"
-       f"<span style='color:{INK}'>&#9472;&#9472;</span> measured &nbsp;&nbsp; "
-       f"<span style='color:{MUTED}'>- - -</span> usual at this time of day &nbsp;&nbsp; "
-       f"<span style='color:{BLUE}'>&#9472;&#9472;</span> forecast, band = 10% to 90% &nbsp;&nbsp; "
+       "<b>&#9472;&#9472;</b> measured &nbsp;&nbsp; <b>&#9476;&#9476;</b> forecast, shaded = 10% to 90% &nbsp;&nbsp; "
+       f"<span style='color:{MUTED}'><b>&middot;&middot;&middot;&middot;</b></span> usual at this time of day &nbsp;&nbsp; "
        f"<span style='color:{MUTED}'>|</span> latest photo</div>")
+
+
+def tile(where, label_: str, value: str, note: str | None = None, color: str = SLATE) -> None:
+    """A number with its name above and a note below, marked with a colour bar on the left."""
+    where.markdown(
+        f"<div style='border-left:4px solid {color};padding:0.1rem 0 0.2rem 0.75rem;margin-bottom:0.9rem'>"
+        f"<div style='font-size:0.85rem;color:#52514e'>{label_}</div>"
+        f"<div style='font-size:2rem;line-height:1.25;font-variant-numeric:tabular-nums'>{value}</div>"
+        f"<div style='font-size:0.8rem;color:#52514e;min-height:1.1rem'>{note or ''}</div></div>", unsafe_allow_html=True)
+
+
+def state_colour(share: float) -> str:
+    return GOOD if share >= 0.98 else WARN if share >= 0.90 else BAD
 
 
 def _plain(chart: alt.LayerChart, height: int) -> alt.LayerChart:
@@ -90,12 +105,13 @@ def _plain(chart: alt.LayerChart, height: int) -> alt.LayerChart:
         .configure_view(stroke=None)
 
 
-def series_figure(cd: pd.DataFrame, title: str, now: pd.Timestamp, height: int = 240) -> alt.Chart:
-    """Measured (dark), usual for the time of day (grey dashes), forecast (blue line, 10-90% band)."""
-    scale = alt.Scale(domain=["measured", "usual", "forecast"], range=[INK, MUTED, BLUE])
-    dash = alt.Scale(domain=["measured", "usual", "forecast"], range=[[1, 0], [3, 3], [1, 0]])
+def series_figure(cd: pd.DataFrame, title: str, now: pd.Timestamp, height: int = 240, color: str = BLUE) -> alt.Chart:
+    """Measured (solid) and forecast (dashed, with its 10-90% band) in the series' colour; usual for the time of
+    day as grey dots."""
+    scale = alt.Scale(domain=["measured", "usual", "forecast"], range=[color, MUTED, color])
+    dash = alt.Scale(domain=["measured", "usual", "forecast"], range=[[1, 0], [1, 3], [5, 3]])
     base = alt.Chart(cd).encode(x=alt.X("timestamp:T", title=None, axis=alt.Axis(format="%a %H:%M", labelAngle=0, tickCount=6)))
-    area = base.transform_filter(alt.datum.kind == "forecast").mark_area(opacity=0.18, color=BLUE).encode(
+    area = base.transform_filter(alt.datum.kind == "forecast").mark_area(opacity=0.16, color=color).encode(
         y=alt.Y("low:Q", title=None), y2="high:Q")
     lines = base.mark_line(strokeWidth=1.8).encode(
         y=alt.Y("value:Q", title=None, scale=alt.Scale(zero=True)),
@@ -147,7 +163,7 @@ def headline(space, run: dict | None, table: pd.DataFrame) -> list[str]:
 
 try:
     settings, spaces = _setup()
-    conn = data.connect_readonly(settings.db_path)
+    data.connect_readonly(settings.db_path).close()            # fail here, with a clear message, if it cannot open
 except (SbiError, OSError) as e:
     st.error(f"Setup problem: {e}")
     st.stop()
@@ -162,6 +178,16 @@ first_tab = {"now": 0, "accuracy": 1, "pipeline": 2, "all": 3}.get(_q.get("tab",
 
 @st.fragment(run_every=60)
 def page() -> None:
+    """One refresh. The connection is opened here, not once for the session: Streamlit runs the timed refresh in a
+    different thread from the first page load, and an SQLite connection may only be used in the thread that made it."""
+    conn = data.connect_readonly(settings.db_path)
+    try:
+        _page(conn)
+    finally:
+        conn.close()
+
+
+def _page(conn) -> None:
     top = st.columns([3, 2])
     space_id = top[0].radio("Space", list(spaces), index=first_space, horizontal=True, label_visibility="collapsed",
                             format_func=lambda s: spaces[s].name)
@@ -193,9 +219,10 @@ def page() -> None:
             left.image(str(settings.root / row["image_path"]), width="stretch")
         sm = data.summary(table, forecast, heads)
         tiles = right.columns(max(len(sm), 1))
-        for tile, r in zip(tiles, sm.itertuples(index=False)):
-            delta = None if pd.isna(r.usual) else f"{'+' if r.now >= r.usual else ''}{num(r.now - r.usual, r.column)} vs usual {num(r.usual, r.column)}"
-            tile.metric(r.series, num(r.now, r.column), delta, delta_color="off")
+        colour = {t: SERIES[i] for i, t in enumerate(heads[:len(SERIES)])}      # fixed per space, not per selection
+        for where, r in zip(tiles, sm.itertuples(index=False)):
+            note = None if pd.isna(r.usual) else f"{'+' if r.now >= r.usual else ''}{num(r.now - r.usual, r.column)} vs usual {num(r.usual, r.column)}"
+            tile(where, r.series, num(r.now, r.column), note, colour.get(r.column, SLATE))
         allsm = data.summary(table, forecast, targets or heads)
         if not allsm.empty:
             cols_ = allsm["column"]
@@ -215,7 +242,7 @@ def page() -> None:
         for i, target in enumerate(picked):
             cd = data.series_chart(table, forecast, target, hours=hours)
             if not cd.empty:
-                cols[i % 2].altair_chart(series_figure(cd, data.label(target), now), width="stretch")
+                cols[i % 2].altair_chart(series_figure(cd, data.label(target), now, color=colour.get(target, SLATE)), width="stretch")
 
     with t_acc:
         if not targets:
@@ -232,10 +259,10 @@ def page() -> None:
                 err = (done["forecast"] - done["measured"]).abs()
                 inside = ((done["measured"] >= done["low"]) & (done["measured"] <= done["high"])).mean()
                 m = st.columns(4)
-                m[0].metric("Forecasts checked", len(done))
-                m[1].metric("Average miss", f"{err.mean():.2g}")
-                m[2].metric("Average measured value", f"{done['measured'].mean():.2g}")
-                m[3].metric("Measured inside the band", f"{inside:.0%}", "expected about 80%", delta_color="off", delta_arrow="off")
+                tile(m[0], "Forecasts checked", str(len(done)))
+                tile(m[1], "Average miss", f"{err.mean():.2g}", color=BLUE)
+                tile(m[2], "Average measured value", f"{done['measured'].mean():.2g}", color=INK)
+                tile(m[3], "Measured inside the shaded range", f"{inside:.0%}", "expected about 80%", BLUE)
                 st.altair_chart(lead_figure(h, f"{data.label(target)}: forecast made {lead_name} vs what was measured"), width="stretch")
             points = _points(space_id, stamp)
             if not points.empty:
@@ -263,13 +290,14 @@ def page() -> None:
         total = flow.iloc[-1]
         timing = data.tick_timing(settings.resolve(settings.paths.logs) / "tick.log")
         m = st.columns(5)
-        m[0].metric("Photos captured", f"{fn['photos'][1]} / {fn['photos'][0]}", f"{fn['share'][1]:.1%} of slots", delta_color="off", delta_arrow="off")
-        m[1].metric("Numbers per photo", int(total["extracted"]))
-        m[2].metric("Usable series", int(total["usable"]), "seen often enough, not constant", delta_color="off", delta_arrow="off")
-        m[3].metric("Given to Chronos-2", int(total["given_as_input"]) + int(total["forecast"]),
-                    f"{int(total['forecast'])} forecast, {int(total['given_as_input'])} inputs", delta_color="off", delta_arrow="off")
-        m[4].metric("Time per 15-min run", f"{timing['median_s']:.0f} s" if timing.get("ticks") else "-",
-                    f"slowest {timing['max_s']:.0f} s of last {timing['ticks']}" if timing.get("ticks") else None, delta_color="off", delta_arrow="off")
+        tile(m[0], "Photos captured", f"{fn['photos'][1]} / {fn['photos'][0]}", f"{fn['share'][1]:.1%} of slots",
+             state_colour(fn["share"][1]))
+        tile(m[1], "Numbers per photo", str(int(total["extracted"])))
+        tile(m[2], "Usable series", str(int(total["usable"])), "seen often enough, not constant")
+        tile(m[3], "Given to Chronos-2", str(int(total["given_as_input"]) + int(total["forecast"])),
+             f"{int(total['forecast'])} forecast, {int(total['given_as_input'])} inputs", BLUE)
+        tile(m[4], "Time per 15-min run", f"{timing['median_s']:.0f} s" if timing.get("ticks") else "-",
+             f"slowest {timing['max_s']:.0f} s of last {timing['ticks']}" if timing.get("ticks") else None)
         a, b = st.columns([2, 3])
         a.markdown("**Photos through each stage**")
         a.dataframe(fn, hide_index=True, width="stretch", column_config={
@@ -281,7 +309,10 @@ def page() -> None:
                         hide_index=True, width="stretch")
         b.markdown("**What is extracted and where it goes** (latest forecast run"
                    + (f", {run['origin_local'].replace('T', ' ')[:16]}, inputs '{run['variant']}'" if run else "") + ")")
-        b.dataframe(flow.rename(columns={"given_as_input": "input to model"}), hide_index=True, width="stretch", height=495)
+        shown = flow.rename(columns={"given_as_input": "input to model"})
+        b.dataframe(shown.style.map(lambda v: f"background-color: {USE_TINT['input to model']}" if v else "", subset=["input to model"])
+                    .map(lambda v: f"background-color: {USE_TINT['forecast']}" if v else "", subset=["forecast"]),
+                    hide_index=True, width="stretch", height=495)
         st.markdown("**Every 15-minute slot**")
         st.altair_chart(grid_figure(data.capture_grid(table)), width="stretch")
         problems = data.log_problems(settings.resolve(settings.paths.logs) / "tick.log")
@@ -307,7 +338,8 @@ def page() -> None:
         if text:
             view = view[view["dimension"].str.contains(text, case=False, regex=False) | view["column"].str.contains(text, case=False, regex=False)]
         st.caption(f"{len(view)} of {len(dims)} dimensions")
-        st.dataframe(view, hide_index=True, width="stretch", height=420, column_config={
+        tinted = view.style.map(lambda v: f"background-color: {USE_TINT[str(v).split(':')[0]]}", subset=["use"])
+        st.dataframe(tinted, hide_index=True, width="stretch", height=420, column_config={
             "now": st.column_config.Column(width="small"),
             "coverage": st.column_config.ProgressColumn("coverage", min_value=0, max_value=1, format="percent")})
         plottable = [c_ for c_ in view["column"] if view.set_index("column").loc[c_, "family"] != "cat"]

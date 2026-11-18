@@ -99,9 +99,9 @@ def test_the_dashboard_app_runs_end_to_end(root, space_dir, monkeypatch):
     at = AppTest.from_file(str(REPO / "src" / "sbi" / "dashboard" / "app.py"), default_timeout=120).run()
     assert not at.exception, [e.value for e in at.exception]
     assert [t.label for t in at.tabs] == ["Now and next 4 hours", "Forecast vs actual", "Pipeline", "All dimensions"]
-    labels = [m.label for m in at.metric]
-    assert "people (detector)" in labels and "Photos captured" in labels and "Given to Chronos-2" in labels
-    assert next(m.value for m in at.metric if m.label == "Photos captured") == "12 / 12"
+    tiles = " ".join(m.value for m in at.markdown)
+    assert "people (detector)" in tiles and "Given to Chronos-2" in tiles and "12 / 12" in tiles
+    assert tiles.index("Photos captured") < tiles.index("12 / 12") < tiles.index("Numbers per photo")
     assert len(at.dataframe) >= 4                              # forecast table, stages, dimension flow, all dimensions
     kinds = []
     def walk(node):
@@ -112,6 +112,19 @@ def test_the_dashboard_app_runs_end_to_end(root, space_dir, monkeypatch):
     assert kinds.count("vega_lite_chart") >= 3                 # series chart, capture grid, the dimension plot
     at.radio[0].set_value("parking").run()                     # a space with no photos stops cleanly, no traceback
     assert not at.exception and any("No photos stored yet for Parking" in i.value for i in at.info)
+
+
+def test_the_app_opens_its_database_connection_inside_each_refresh():
+    """The timed refresh runs in another thread than the first load; a connection made once for the session then
+    fails with 'SQLite objects created in a thread can only be used in that same thread'."""
+    import ast
+    tree = ast.parse((REPO / "src" / "sbi" / "dashboard" / "app.py").read_text())
+    def assigns_connection(node):
+        return isinstance(node, ast.Assign) and "connect_readonly" in ast.unparse(node.value)
+    assert not [n for n in tree.body if assigns_connection(n)                         # nothing kept at module level
+                or (isinstance(n, ast.Try) and any(assigns_connection(c) for c in n.body))]
+    page = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "page")
+    assert any(assigns_connection(n) for n in page.body) and "conn.close()" in ast.unparse(page)
 
 
 # ---------------------------------------------------------------- the numbers behind each tab
