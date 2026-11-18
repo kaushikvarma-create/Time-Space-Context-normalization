@@ -19,7 +19,7 @@ import streamlit as st
 
 from sbi.dashboard import data
 from sbi.errors import SbiError
-from sbi.forecast.accuracy import by_lead, by_target, live_points
+from sbi.forecast.accuracy import by_lead, by_target, by_weekday, live_points, outdated_runs
 from sbi.forecast.build import table_for
 from sbi.settings import load_settings
 from sbi.spaces import discover_space_files, load_space
@@ -289,7 +289,12 @@ def _page(conn) -> None:
             ctl = st.columns([3, 1])
             target = ctl[0].selectbox("Series", targets, format_func=data.label, key=f"acc_{space_id}")
             lead_name = ctl[1].radio("Forecast made", list(LEADS), horizontal=True, key="lead")
-            h = data.lead_history(conn, space_id, table, target, LEADS[lead_name])
+            old_runs = outdated_runs(conn, space_id)
+            if old_runs:
+                st.caption(f"{len(old_runs)} earlier forecast runs are not scored here: the photos behind them have since "
+                           "been read again (a detector change), so those forecasts predicted readings that no longer "
+                           "exist. Scoring starts again from the first forecast after the re-read.")
+            h = data.lead_history(conn, space_id, table, target, LEADS[lead_name], skip_runs=old_runs)
             done = h.dropna(subset=["measured"])
             if done.empty:
                 st.info("No forecast at this lead has a measured outcome yet.")
@@ -304,6 +309,13 @@ def _page(conn) -> None:
                 st.altair_chart(lead_figure(h, f"{data.label(target)}: forecast made {lead_name} vs what was measured"), width="stretch")
             points = _points(space_id, stamp)
             if not points.empty:
+                wd = by_weekday(points, target)
+                if not wd.empty:
+                    st.markdown(f"**{data.label(target)} by day of week** (the day that was predicted, every lead time "
+                                "together). A day where the forecast average sits far from the measured average is a "
+                                "day the model does not understand yet.")
+                    st.dataframe(wd.round(2), hide_index=True, width="stretch", column_config={
+                        "inside band": st.column_config.NumberColumn(format="percent")})
                 st.markdown("**All series together.** Skill = how much smaller the miss is than assuming nothing "
                             "changes (0 = no better, 1 = perfect, negative = worse). Coverage = share of measured "
                             "values inside the 10% to 90% band.")
@@ -311,6 +323,8 @@ def _page(conn) -> None:
                     "variant": "inputs given", "lead": "how far ahead", "runs": "forecast runs", "targets": "series",
                     "points": "forecasts checked", "coverage": "inside band"})
                 st.dataframe(lead_t.round(3), hide_index=True, width="stretch")
+                st.markdown("**All series together, by day of week.**")
+                st.dataframe(by_weekday(points).round(3), hide_index=True, width="stretch")
                 per = by_target(points)
                 per.insert(0, "series", per["target"].map(data.label))
                 per = per.drop(columns=["model", "target"]).rename(columns={

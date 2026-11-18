@@ -29,13 +29,40 @@ def lead_bucket(minutes: int) -> str:
     return next(label for limit, label in LEADS if minutes <= limit)
 
 
+def outdated_runs(conn: sqlite3.Connection, space_id: str, *, tolerance: float = 0.05) -> set[int]:
+    """Forecast runs made from a history that has since been read again (`sbi reprocess`, for example after a
+    detector change). Their forecasts predicted the old readings, so scoring them against the new ones would
+    measure the change of detector, not the forecast. A run is outdated when more than `tolerance` of the photos
+    taken before it was made were read after it was made. (A few late reads, such as a photo retried after a VLM
+    outage, do not count.)"""
+    frames = pd.read_sql_query("SELECT ts_utc, processed_utc FROM frames WHERE space_id=? AND processed_utc IS NOT NULL "
+                               "ORDER BY ts_utc", conn, params=(space_id,))
+    runs = conn.execute("SELECT run_id, created_utc FROM forecast_runs WHERE space_id=?", (space_id,)).fetchall()
+    if frames.empty or not runs:
+        return set()
+    def utc(values) -> np.ndarray:                                       # plain UTC datetime64, comparable everywhere
+        return pd.to_datetime(values, utc=True).tz_localize(None).to_numpy()
+    taken, read = utc(frames["ts_utc"].to_numpy()), utc(frames["processed_utc"].to_numpy())
+    out = set()
+    for run_id, created in runs:
+        made = utc([created])[0]
+        before = int(np.searchsorted(taken, made, side="right"))           # photos taken up to the run
+        if before and float((read[:before] > made).mean()) > tolerance:
+            out.add(int(run_id))
+    return out
+
+
 def live_points(conn: sqlite3.Connection, space_id: str, table: pd.DataFrame, *, since: str | None = None) -> pd.DataFrame:
-    """One row per stored forecast point that now has a measured truth."""
+    """One row per stored forecast point that now has a measured truth. Runs whose history has since been read
+    again (see outdated_runs) are left out."""
     since_iso = pd.Timestamp(since).isoformat() if since else ""     # stored origins are ISO text: compare like with like
     runs = conn.execute("SELECT run_id, model, variant, origin_local, step_minutes, quantiles_json FROM forecast_runs "
                         "WHERE space_id=? AND origin_local >= ? ORDER BY run_id", (space_id, since_iso)).fetchall()
+    skip = outdated_runs(conn, space_id)
     parts = []
     for run in runs:
+        if run["run_id"] in skip:
+            continue
         f = load_forecast(conn, run["run_id"])
         if f.empty:
             continue
@@ -93,3 +120,28 @@ def by_lead(points: pd.DataFrame) -> pd.DataFrame:
                      "coverage": float(g["covered"].mean()) if g["covered"].notna().any() else np.nan})
     order = {label: i for i, (_, label) in enumerate(LEADS)}
     return pd.DataFrame(rows).sort_values(["model", "variant", "lead"], key=lambda s: s.map(order) if s.name == "lead" else s).reset_index(drop=True)
+
+
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def by_weekday(points: pd.DataFrame, target: str | None = None) -> pd.DataFrame:
+    """Scores per weekday of the moment that was predicted, Monday first; days with no scored forecast are left out.
+    For one `target`: what was measured and forecast on average, the average miss and the miss of holding the last
+    value. For all series together (target=None) those averages would mix units, so only the pooled skill and the
+    share inside the band are given. Shows whether weekends and Mondays are forecast as well as midweek."""
+    cols = (["day", "forecasts checked", "average measured", "average forecast", "average miss",
+             "miss if nothing changed", "inside band"] if target else ["day", "forecasts checked", "skill", "inside band"])
+    if points.empty:
+        return pd.DataFrame(columns=cols)
+    p = points[points["target"] == target] if target else points
+    rows = []
+    for dow, g in p.groupby(pd.to_datetime(p["timestamp"]).dt.dayofweek):
+        inside = float(g["covered"].mean()) if g["covered"].notna().any() else np.nan
+        if target:
+            rows.append({"day": WEEKDAYS[dow], "forecasts checked": len(g), "average measured": float(g["y"].mean()),
+                         "average forecast": float(g["pred"].mean()), "average miss": float(g["abs_err"].mean()),
+                         "miss if nothing changed": float(g["persist_err"].mean()), "inside band": inside})
+        else:
+            rows.append({"day": WEEKDAYS[dow], "forecasts checked": len(g), "skill": pooled_skill(g), "inside band": inside})
+    return pd.DataFrame(rows, columns=cols)

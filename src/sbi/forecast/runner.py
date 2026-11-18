@@ -45,7 +45,7 @@ def forecast_space(conn: sqlite3.Connection, space: SpaceConfig, result: TableRe
                        settings=settings, table_settings=table_settings)
     forecast = predict(forecaster, prepared, settings.quantiles, result.catalog)
     origin = table.index[-1]
-    inputs = prepared.covariates + (["cal.*"] if prepared.calendar else [])
+    inputs = prepared.covariates + (["cal.*"] if prepared.calendar else []) + (["prof.*"] if prepared.profiles else [])
     with transaction(conn):
         run_id = insert_run(conn, space_id=space.space_id, origin_local=origin.isoformat(), model=forecaster.name,
                             variant=variant, horizon=horizon, step_minutes=step_minutes, context_slots=len(table),

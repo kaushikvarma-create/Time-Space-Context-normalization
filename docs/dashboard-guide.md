@@ -74,6 +74,8 @@ Hover over a chart to read exact values. Headline series are blue, orange, green
 
 Shows how past forecasts compared with what was then measured.
 
+If stored photos are read again with a different detector, the forecasts made before that are left out: they predicted the old readings, so comparing them with the new ones would be unfair. A note above the tiles says how many runs are left out. (The detector was changed on 18 Nov 2026, so scoring starts again from that morning.)
+
 - **Series**: the series to check.
 - **Forecast made**: how far ahead the forecast was made: 1, 2 or 4 hours before the moment it predicts.
 
@@ -89,12 +91,24 @@ Shows how past forecasts compared with what was then measured.
 ### Chart
 Dark line: what was measured. Blue line and band: what the forecast made that far ahead said for the same moment. The closer the two lines, the better. Blue points to the right of where the dark line ends are forecasts whose time has not come yet.
 
-### All series together
-Scores over every forecast series of the space, grouped by how far ahead the forecast looked.
+### The chosen series by day of week
+One row per weekday of the moment that was predicted, with every lead time together.
 
 | Column | Meaning |
 |---|---|
-| inputs given | The set of inputs the model received. `all` = the calendar plus every usable dimension. `calendar` = the calendar only (used before 18 Nov 2026, 08:15). |
+| day | The weekday the forecast was for. Days with no checked forecast yet are missing. |
+| forecasts checked | Predictions for that weekday that now have a measured value. |
+| average measured / average forecast | What happened on average, and what was forecast on average. If these are far apart, the model does not understand that kind of day yet. This is how a Monday that is forecast like the empty Sunday before it shows up. |
+| average miss | Average distance between forecast and measured value. |
+| miss if nothing changed | The same for the "last value stays" guess. |
+| inside band | Share of measured values inside the 10% to 90% range. |
+
+### All series together
+Scores over every forecast series of the space, grouped by how far ahead the forecast looked. A second table gives the same skill and inside-band share per weekday.
+
+| Column | Meaning |
+|---|---|
+| inputs given | The set of inputs the model received. `calendar` = the calendar only (used before 18 Nov 2026, 08:15). `all` = the calendar plus every usable dimension. `all_profile` = `all` plus, for each forecast series, what that kind of day looked like at each clock time so far: the same weekday once it has been seen at least twice before, otherwise working days or non-working days. |
 | how far ahead | Lead time group: 0-1 h, 1-2 h, 2-4 h. |
 | forecast runs | Number of hourly forecasts scored. |
 | series | Number of series in those forecasts. |

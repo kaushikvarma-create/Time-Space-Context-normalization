@@ -11,9 +11,10 @@ from fnmatch import fnmatchcase
 import pandas as pd
 
 from ..errors import ForecastError
-from ..settings import ALL_KINDS, ForecastSettings, TableSettings
+from ..settings import ALL_KINDS, PROFILE_KIND, ForecastSettings, TableSettings
 from .models import Forecaster, qname
-from .table import TableResult, all_covariates, select_covariates, to_chronos
+from .profile_features import add_profiles
+from .table import TableResult, all_covariates, calendar as calendar_columns, select_covariates, to_chronos
 
 log = logging.getLogger(__name__)
 NONNEGATIVE_KINDS = {"scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img"}   # counts, shares, image stats
@@ -50,6 +51,7 @@ class Prepared:
     calendar: bool                 # calendar columns are given as known-future inputs
     context: pd.DataFrame
     future: pd.DataFrame
+    profiles: bool = False         # a day-type profile of every target is given as a known-future input
 
 
 def prepare(result: TableResult, space_id: str, patterns: list[str], kinds: list[str], *, horizon: int,
@@ -57,7 +59,7 @@ def prepare(result: TableResult, space_id: str, patterns: list[str], kinds: list
     """Inputs for one forecast from `result` (whose table ends at the forecast origin). `kinds` is the variant:
     column kinds the model may see, with "cal" meaning the calendar."""
     targets = resolve_targets(patterns, result.catalog, settings.max_targets)
-    past_kinds = [k for k in kinds if k != "cal"]
+    past_kinds = [k for k in kinds if k not in ("cal", PROFILE_KIND)]
     covariates: list[str] = []
     if ALL_KINDS in past_kinds:                       # everything the pipeline extracted, uncapped
         covariates = all_covariates(result.catalog, targets=targets)
@@ -67,7 +69,13 @@ def prepare(result: TableResult, space_id: str, patterns: list[str], kinds: list
                                        autocorr_min_slots=table_settings.autocorr_min_slots, kinds=past_kinds)
     calendar = "cal" in kinds
     context, future = to_chronos(result, space_id, targets, horizon, covariates=covariates, calendar_inputs=calendar)
-    return Prepared(targets, covariates, calendar, context, future)
+    profiles = PROFILE_KIND in kinds
+    if profiles:
+        ahead = pd.DatetimeIndex(pd.to_datetime(future["timestamp"]))
+        context, future, _ = add_profiles(
+            context, future, targets, result.table["cal.is_working_day"].to_numpy(),
+            calendar_columns(ahead, result.cal)["cal.is_working_day"].to_numpy())
+    return Prepared(targets, covariates, calendar, context, future, profiles)
 
 
 def predict(forecaster: Forecaster, prepared: Prepared, quantiles: list[float], catalog: pd.DataFrame) -> pd.DataFrame:

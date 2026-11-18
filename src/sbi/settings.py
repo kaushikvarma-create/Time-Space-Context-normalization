@@ -107,9 +107,12 @@ class CalendarSettings(_Strict):
 
 
 ALL_KINDS = "*"            # in a variant: every model-ready column the pipeline extracted, no cap
+PROFILE_KIND = "prof"      # in a variant: each target's day-type profile, known in advance (forecast/profile_features)
 
 DEFAULT_VARIANTS: dict[str, list[str]] = {
     "all": ["cal", ALL_KINDS],                         # calendar + every extracted dimension (live default)
+    "all_profile": ["cal", ALL_KINDS, PROFILE_KIND],   # + what this kind of day looked like at each time so far
+    "profile": ["cal", PROFILE_KIND],                  # calendar + profiles only
     "univariate": [],                                  # the targets alone, no calendar
     "calendar": ["cal"],                               # + calendar (known in advance)
     "detector": ["cal", "scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat"],

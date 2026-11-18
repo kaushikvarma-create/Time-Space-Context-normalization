@@ -550,3 +550,20 @@ photos and reported on the other half (123 photos, 70 of them at night).
   laptop 0.14 -> 0, bag 0.86 -> 0.57; people and cars still exact; motorcycles 3.45 -> 3.18.
 - Still open: the remaining 20% are mostly one chair missed behind a person or bag. Getting past that needs a
   detector trained on these two camera views, which needs boxes drawn on photos.
+
+## 2026-11-18: Day-of-week awareness
+
+- Finding: Chronos-2 forecasts from recent values and the daily shape, not from the weekday. Backtest, forecasts made
+  before 09:00 for 09:00 to 13:00: Monday 16 Nov cabin people 0.7 forecast vs 2.45 measured; parking vehicles 5.2 vs
+  12.6. Cause: 5 days of history, 2 of them an empty weekend, so each weekday was seen at most once.
+- Added input `prof.<target>` (variant `all_profile`, now live): for each forecast series, the average at the same
+  clock time on other days of the same kind (same weekday once seen twice before, else working / non-working day).
+  Past rows leave their own day out; computed only from the history before each forecast.
+- Backtest (new detector data, 46 origins), skill vs weekday-by-time average, `all` -> `all_profile`: cabin 0.406 ->
+  0.417, parking 0.359 -> 0.350; inside-band share closer to 80% in both. Parking Tuesday-morning miss 2.8 -> 1.8.
+  It does not fix Monday (cabin 0.73 -> 0.74): the model still sides with the empty days before it. Small gain now;
+  expected to matter once weekday-level profiles exist (from the third week).
+- Dashboard: "by day of week" tables on the Forecast vs actual tab.
+- Forecast runs made before their history was re-read (the detector switch) are no longer scored: 45 cabin and 44
+  parking runs left out; live scoring restarts at run 90 / 91.
+- Next checks: Sat 21 Nov and Mon 23 Nov forecasts. With a month of data, fine-tune Chronos-2 on this site.

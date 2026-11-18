@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -194,13 +195,15 @@ def series_chart(table: pd.DataFrame, forecast: pd.DataFrame, target: str, *, ho
     return pd.concat([cd, extra], ignore_index=True)
 
 
-def lead_history(conn: sqlite3.Connection, space_id: str, table: pd.DataFrame, target: str, step: int) -> pd.DataFrame:
+def lead_history(conn: sqlite3.Connection, space_id: str, table: pd.DataFrame, target: str, step: int,
+                 skip_runs: Collection[int] = ()) -> pd.DataFrame:
     """Every stored forecast of `target` made `step` slots ahead, next to what was then measured.
     Columns: timestamp, forecast, low, high, measured (NaN until the time has passed). When several runs forecast
-    the same moment at that lead, the newest run is used."""
+    the same moment at that lead, the newest run is used. `skip_runs` leaves runs out (accuracy.outdated_runs)."""
     df = pd.read_sql_query(
         "SELECT f.run_id, f.ts_local, f.quantile, f.value FROM forecasts f JOIN forecast_runs r USING(run_id) "
         "WHERE r.space_id=? AND f.target=? AND f.step=?", conn, params=(space_id, target, step))
+    df = df[~df["run_id"].isin(set(skip_runs))]
     cols = ["timestamp", "forecast", "low", "high", "measured"]
     if df.empty:
         return pd.DataFrame(columns=cols)
