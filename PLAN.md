@@ -518,14 +518,3 @@ Audit of the live system (13 Nov 09:00 to 18 Nov 08:30 IST, both spaces):
   boxes do not meet or whose sizes differ too much are now skipped; same table, 4.7 s (parking 3.3 s to 1.2 s).
 - Dashboard rewritten (`scripts/dashboard.sh`, http://localhost:8502): now and next 4 hours, forecast vs actual,
   pipeline, all dimensions. It rebuilds a space's table only when a new photo or forecast arrives.
-
-## 2026-11-18: Chair count fixed with steady counts
-
-- Problem: the cabin has 7 chairs (labelled 7 in all 7 labelled photos), but `count.yolo.chair` ranged 4 to 10 and
-  changed in 45% of slots. It averaged 8 at night (dark shapes read as chairs) and dropped when people hid chairs.
-  It was right in 31% of slots. Monitors the same: 4 to 5 in truth, 3 to 9 from the detector.
-- Fix: `steady.all.<type>` for the types a space lists under `steady_types`: the median of the detector's and the
-  VLM's counts over the trailing 24 hours. Chairs read 7 in 90% of slots (6 only during the first day), monitors 4,
-  desktop PCs 2.
-- The dashboard shows the steady counts under the photo; raw furniture counts are no longer headline tiles or
-  forecast targets (they stay as model inputs).

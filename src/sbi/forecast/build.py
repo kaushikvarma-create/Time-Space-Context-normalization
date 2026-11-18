@@ -23,6 +23,4 @@ def table_for(conn: sqlite3.Connection, settings: Settings, space: SpaceConfig, 
                        mask_dup_iou=tc.mask_dup_iou, grid=(space.grid.cols, space.grid.rows),
                        cell_area_min=tc.cell_area_min, embed_model=settings.embedder.version,
                        embed_components=tc.embed_components, embed_fit_end=fit_end,
-                       probe_scorer=settings.scorer.version, probe_groups=space.probes, calendar_spec=cal,
-                       steady_labels=tuple(space.steady_labels), steady_window=tc.steady_window,
-                       steady_min_values=tc.steady_min_values)
+                       probe_scorer=settings.scorer.version, probe_groups=space.probes, calendar_spec=cal)

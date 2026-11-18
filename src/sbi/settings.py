@@ -112,8 +112,8 @@ DEFAULT_VARIANTS: dict[str, list[str]] = {
     "all": ["cal", ALL_KINDS],                         # calendar + every extracted dimension (live default)
     "univariate": [],                                  # the targets alone, no calendar
     "calendar": ["cal"],                               # + calendar (known in advance)
-    "detector": ["cal", "scene", "steady", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat"],
-    "full": ["cal", "scene", "steady", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat", "emb", "probe"],
+    "detector": ["cal", "scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat"],
+    "full": ["cal", "scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img", "cat", "emb", "probe"],
 }
 
 
@@ -188,8 +188,6 @@ class TableSettings(_Strict):
     autocorr_min_slots: int = Field(96, ge=3)        # smoothness filter only once there is ~1 day of slots
     embed_components: int = Field(4, ge=0, le=64)    # principal components of the image vectors, as emb.*.pcN
     conf_levels: list[float] = [0.05, 0.10]          # extra detector thresholds to count at (count.yolo_cNN.*)
-    steady_window: int = Field(96, ge=1)             # slots pooled for steady.all.<type> (96 = 24 hours)
-    steady_min_values: int = Field(24, ge=1)         # readings needed in that window before a steady count exists
     mask_dup_iou: float = Field(0.5, gt=0, le=1)     # same-type outlines overlapping this much = one object
     cell_area_min: float = Field(0.02, ge=0, lt=1)   # smaller cell coverage is edge spill, recorded as 0
 

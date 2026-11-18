@@ -97,7 +97,7 @@ def test_forecast_settings_rules():
 
 
 def test_forecast_targets_in_space_files_and_their_validation(space, parking):
-    assert "steady.*" in space.forecast_targets and "scene.vehicles_yolo" in parking.forecast_targets
+    assert "count.yolo.*" in space.forecast_targets and "scene.vehicles_yolo" in parking.forecast_targets
     for bad in (["a", "a"], ["  "]):
         with pytest.raises(ValidationError, match="forecast_targets"):
             SpaceConfig.model_validate({**space.model_dump(), "forecast_targets": bad})
@@ -379,8 +379,7 @@ def test_the_backtest_and_live_runs_both_apply_the_non_negative_rule(conn, space
                        variants={"calendar": ["cal"]}), settings=FS, table_settings=TS)
     by = run.raw.groupby("target")["pred"].agg(["min", "max"])
     assert by.loc["count.yolo.chair"].tolist() == [0.0, 0.0] and by.loc["probe.m.people"].tolist() == [-1.0, -1.0]
-    counting = space.model_copy(update={"forecast_targets": ["count.yolo.chair", "probe.*"]})
-    stored = load_forecast(conn, live(conn, counting, forecaster=Negative()).run_id).set_index("target")
+    stored = load_forecast(conn, live(conn, space, forecaster=Negative()).run_id).set_index("target")
     assert (stored.loc["count.yolo.chair", ["q10", "q50"]] == 0.0).all().all()
     assert (stored.loc["probe.m.people", "q10"] == -2.0).all()
 

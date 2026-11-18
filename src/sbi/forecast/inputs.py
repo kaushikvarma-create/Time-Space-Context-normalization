@@ -16,7 +16,7 @@ from .models import Forecaster, qname
 from .table import TableResult, all_covariates, select_covariates, to_chronos
 
 log = logging.getLogger(__name__)
-NONNEGATIVE_KINDS = {"scene", "steady", "count", "rollup", "area", "cell", "cellarea", "rel", "img"}   # counts, shares, image stats
+NONNEGATIVE_KINDS = {"scene", "count", "rollup", "area", "cell", "cellarea", "rel", "img"}   # counts, shares, image stats
 NOT_TARGETS = {"cal", "cat"}      # calendar is known in advance; categorical fields are strings, not series
 
 

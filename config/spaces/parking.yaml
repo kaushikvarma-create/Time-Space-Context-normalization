@@ -81,10 +81,5 @@ probes:
   disorder: ["motorcycles parked haphazardly in a mess", "vehicles parked in a disorderly way", "a cluttered parking area"]
   orderly:  ["motorcycles parked neatly in straight rows", "vehicles parked in an orderly line", "a well organised parking area"]
 
-# Things that do not move. Counting them photo by photo gives mostly counting error (the detector saw 4 to 10 chairs
-# in a room that has 7), so the table also gets steady.all.<type>: the middle value of the detector's and the VLM's
-# counts over the last 24 hours. Read that for "how many chairs"; the raw counts stay as model inputs.
-steady_types: [barrier, pole, gate]
-
 # What `sbi forecast` predicts (see admin_cabin.yaml).
 forecast_targets: ["scene.vehicles_yolo", "scene.people_yolo", "count.yolo.*", "count.vlm.motorcycle", "area.sam2.*", "probe.*"]

@@ -64,7 +64,7 @@ def _points(space_id: str, stamp: tuple) -> pd.DataFrame:
         conn.close()
 
 
-WHOLE_THINGS = ("scene.", "steady.", "count.", "rollup.", "cell.")      # counts of objects: one decimal is plenty
+WHOLE_THINGS = ("scene.", "count.", "rollup.", "cell.")      # counts of objects: one decimal is plenty
 
 
 def num(v, column: str = "") -> str:
@@ -127,12 +127,6 @@ def header(statuses: list[dict], clock: datetime) -> str:
             f"<div style='display:flex;flex-wrap:wrap'>{''.join(cells)}</div></div>")
 
 
-def plural(name: str, n: int) -> str:
-    """'desktop_pc', 2 -> 'desktop pcs'; 'mouse', 3 -> 'mice'."""
-    word = name.replace("_", " ")
-    return word if n == 1 else {"mouse": "mice", "person": "people"}.get(word, word + "s")
-
-
 def state_colour(share: float) -> str:
     return GOOD if share >= 0.98 else WARN if share >= 0.90 else BAD
 
@@ -192,12 +186,10 @@ def grid_figure(g: pd.DataFrame) -> alt.Chart:
 
 
 def headline(space, run: dict | None, table: pd.DataFrame) -> list[str]:
-    """Series shown first: the scene totals named in the space file, then the busiest counted types that move.
-    Things that do not move (space.steady_labels) are left out: their count is a constant, shown under the photo."""
+    """Series shown first: the targets named outright in the space file, then the busiest counted types."""
     targets = run["targets"] if run else [c for c in table.columns if c.startswith("scene.")]
-    still = set(space.steady_labels)
-    named = [t for t in space.forecast_targets if t in targets and t.startswith("scene.")]
-    counts = [t for t in targets if t.startswith("count.") and t.split(".")[-1] not in still]
+    named = [t for t in space.forecast_targets if t in targets]
+    counts = [t for t in targets if t.startswith("count.") and t not in named]
     counts.sort(key=lambda c: -float(pd.to_numeric(table[c], errors="coerce").mean()) if c in table.columns else 0.0)
     return (named + counts)[:4] or targets[:4]
 
@@ -263,11 +255,6 @@ def _page(conn) -> None:
                            "ORDER BY ts_utc DESC LIMIT 1", (space_id,)).fetchone()
         if row and (settings.root / row["image_path"]).exists():
             left.image(str(settings.root / row["image_path"]), width="stretch")
-        fixed = data.fixtures(table)
-        if fixed:
-            left.markdown("<div style='font-size:0.85rem;color:#52514e;margin-bottom:0.8rem'>In the room, steady over 24 hours: "
-                          + " &nbsp;&middot;&nbsp; ".join(f"<b style='color:#0b0b0b'>{n}</b> {plural(name, n)}" for name, n in fixed)
-                          + "</div>", unsafe_allow_html=True)
         sm = data.summary(table, forecast, heads)
         tiles = right.columns(max(len(sm), 1))
         colour = {t: SERIES[i] for i, t in enumerate(heads[:len(SERIES)])}      # fixed per space, not per selection

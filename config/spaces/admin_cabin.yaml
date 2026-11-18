@@ -126,12 +126,6 @@ probes:
   cleaning: ["a cleaner cleaning an office", "someone mopping the floor", "housekeeping staff tidying a room"]
   papers:   ["papers and documents spread on a desk", "stacks of files on a table", "paperwork on an office desk"]
 
-# Things that do not move. Counting them photo by photo gives mostly counting error (the detector saw 4 to 10 chairs
-# in a room that has 7), so the table also gets steady.all.<type>: the middle value of the detector's and the VLM's
-# counts over the last 24 hours. Read that for "how many chairs"; the raw counts stay as model inputs.
-steady_types: [chair, monitor, keyboard, mouse, desk, table, sofa, plant, desktop_pc, screen, whiteboard, door]
-
 # What `sbi forecast` predicts: table column names or wildcards, matched against the table's model-ready columns
 # (so a new object type is picked up on its own). Threshold variants (count.yolo_c05.*) match only by exact name.
-forecast_targets: ["scene.people_yolo", "scene.people_vlm", "count.yolo.bag", "count.yolo.bottle", "count.yolo.cup", "count.yolo.phone",
-                   "count.yolo.laptop", "count.yolo.book", "steady.*", "area.sam2.*", "probe.*"]
+forecast_targets: ["scene.people_yolo", "scene.people_vlm", "count.yolo.*", "area.sam2.*", "probe.*"]
