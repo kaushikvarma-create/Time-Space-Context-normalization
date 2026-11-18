@@ -90,9 +90,9 @@ def _spaces_by_id(root: Path):
     return {s.space_id: s for s in (load_space(f) for f in discover_space_files(root))}
 
 
-def _build_table(conn, settings, space, start=None, end=None, fit_end=None):
+def _build_table(conn, settings, space, start=None, end=None, fit_end=None, max_slots=None):
     from .forecast.build import table_for
-    return table_for(conn, settings, space, start=start, end=end, fit_end=fit_end)
+    return table_for(conn, settings, space, start=start, end=end, fit_end=fit_end, max_slots=max_slots)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise SbiError(f"unknown space {args.space!r}")
                 fcs = settings.forecast
                 forecaster = build_forecaster(args.model, model=fcs.model, cross_learning=fcs.cross_learning)
-                run = forecast_space(conn, space, _build_table(conn, settings, space), forecaster, settings=fcs,
+                run = forecast_space(conn, space, _build_table(conn, settings, space, max_slots=fcs.max_context), forecaster, settings=fcs,
                                      table_settings=settings.table, variant=args.variant, horizon=args.horizon,
                                      step_minutes=settings.table.step_minutes)
                 print(f"{args.space}: run {run.run_id} | {forecaster.name} | origin {run.origin} IST | "

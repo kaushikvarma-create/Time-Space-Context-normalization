@@ -7,6 +7,7 @@ paths:                          # relative to the project root
   db: data/sbi.db
   images: data/images
   logs: data/logs
+  cache: data/cache             # derived per-photo table columns; safe to delete, rebuilt when needed
 
 frame_source:                   # kind: nvr_rtsp
   kind: nvr_rtsp
@@ -46,6 +47,8 @@ forecast:                       # `sbi forecast` / `sbi backtest`
   quantiles: [0.1, 0.5, 0.9]    # whole percents, must include 0.5 (the point forecast); stored as q10, q50, q90
   horizon: 16                   # slots ahead (16 x 15 min = 4 hours)
   min_context: 96               # slots of history required before forecasting (96 = 1 day)
+  max_context: 8192             # newest slots of history used by live forecasts and the dashboard (Chronos-2 reads at
+                                # most 8192, about 85 days)
   max_targets: 100              # cap on targets per space (what to forecast is `forecast_targets` in the space file)
   cross_learning: false         # let the model share information across targets in a batch (changes results)
   variant: all_profile          # inputs for live forecasts: the calendar, every model-ready extracted dimension, and for

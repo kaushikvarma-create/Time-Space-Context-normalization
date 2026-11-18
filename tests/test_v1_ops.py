@@ -145,7 +145,7 @@ def test_scheduled_forecasts_really_store_runs_end_to_end(settings, space_dir, m
     # the table is synthetic (four ticks cannot make a series usable); tick, scheduler, runner and storage are real
     import sbi.forecast.schedule as sched
     from sbi.forecast.models import Persistence
-    monkeypatch.setattr(sched, "table_for", lambda conn, st, sp: result_for(make_table(120)))
+    monkeypatch.setattr(sched, "table_for", lambda conn, st, sp, **kw: result_for(make_table(120)))
     s = scheduled(settings, every=30)
     for m in (0, 15, 30, 45):
         tick(s, space_dir, thursday_ist(10, m), forecaster=Persistence())
@@ -171,7 +171,7 @@ def test_forecasting_problems_never_touch_capture(settings, space_dir, monkeypat
 def test_run_scheduled_reports_each_space(settings, space, parking, monkeypatch):
     s = scheduled(settings)
     import sbi.forecast.schedule as sched
-    monkeypatch.setattr(sched, "table_for", lambda conn, st, sp: result_for(make_table(120)))
+    monkeypatch.setattr(sched, "table_for", lambda conn, st, sp, **kw: result_for(make_table(120)))
     from sbi.store.db import connect, migrate
     from sbi.store.registry import register_space
     c = connect(s.db_path); migrate(c)
@@ -186,7 +186,7 @@ def test_run_scheduled_reports_each_space(settings, space, parking, monkeypatch)
 def test_an_unexpected_error_in_one_space_does_not_stop_the_next(settings, space, parking, monkeypatch, caplog):
     s = scheduled(settings)
     import sbi.forecast.schedule as sched
-    def table(conn, st, sp):
+    def table(conn, st, sp, **kw):
         if sp.space_id == "admin_cabin":
             raise RuntimeError("unexpected")
         return result_for(make_table(120))

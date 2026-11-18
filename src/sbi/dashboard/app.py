@@ -49,7 +49,7 @@ def _table(space_id: str, stamp: tuple) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(table, catalog). `stamp` is only the cache key: a new photo or forecast changes it."""
     conn = data.connect_readonly(settings.db_path)
     try:
-        result = table_for(conn, settings, spaces[space_id])
+        result = table_for(conn, settings, spaces[space_id], max_slots=settings.forecast.max_context)
         return result.table, result.catalog
     finally:
         conn.close()

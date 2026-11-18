@@ -53,7 +53,7 @@ def run_scheduled(conn: sqlite3.Connection, settings: Settings, spaces: list[Spa
     out: list[ScheduledForecast] = []
     for space in todo:
         try:
-            run = forecast_space(conn, space, table_for(conn, settings, space), forecaster, settings=fs,
+            run = forecast_space(conn, space, table_for(conn, settings, space, max_slots=fs.max_context), forecaster, settings=fs,
                                  table_settings=settings.table, step_minutes=settings.table.step_minutes)
             out.append(ScheduledForecast(space.space_id, run.run_id))
         except SbiError as e:

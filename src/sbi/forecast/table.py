@@ -66,6 +66,7 @@ from ..store.scores import load_scores
 from ..sitecal import CalendarSpec
 from ..taxonomy import Taxonomy, load_taxonomy
 from .embed_features import embedding_features
+from .feature_cache import FeatureCache, fingerprint
 from .probe_features import concept_values
 from .mask_features import mask_features
 
@@ -124,6 +125,76 @@ def _name(tax: Taxonomy, raw: str | None, fallback: str) -> str:
     return (tax.lookup(raw) if raw else None) or fallback
 
 
+FEATURES_VERSION = 1          # bump when frame_columns() changes what it computes: old cache entries then miss
+_SQL_BATCH = 500              # ids per SQL statement (SQLite limits bound variables)
+
+
+def frame_columns(conn: sqlite3.Connection, tax: Taxonomy, frame_ids: list[int], *, conf_levels: tuple[float, ...],
+                  mask_sources: dict[str, float | None], mask_dup_iou: float, grid: tuple[int, int] | None,
+                  cell_area_min: float) -> dict[int, dict[str, float]]:
+    """For each photo, every column derived from its stored objects, boxes, outlines and relations:
+    count.* rollup.* cell.* area.* cellarea.* rel.*  ({frame_id: {column: value}}). A photo with nothing stored gets
+    an empty dict. Pure function of the stored rows, the vocabulary links and the arguments."""
+    out: dict[int, dict[str, float]] = {int(f): defaultdict(float) for f in frame_ids}
+    for start in range(0, len(frame_ids), _SQL_BATCH):
+        ids = [int(f) for f in frame_ids[start:start + _SQL_BATCH]]
+        marks = ",".join("?" * len(ids))
+        for fid, src, otype, raw, cell, n in conn.execute(
+                f"SELECT frame_id, source, object_type, raw_label, cell_id, count FROM observations "
+                f"WHERE frame_id IN ({marks})", ids):
+            cols, name = out[fid], _name(tax, raw, otype)
+            cols[f"count.{src}.{name}"] += n
+            for anc in tax.ancestors(name) | {name}:      # roll-up = the name itself + all is_a descendants
+                cols[f"rollup.{src}.{anc}"] += n
+            if src == "yolo" and cell:
+                cols[f"cell.yolo.{cell}.{name}"] += n
+        boxes: dict[tuple[str, str, int], list] = defaultdict(list)          # (source, name, frame) -> boxes
+        for fid, otype, raw, bbox in conn.execute(
+                f"SELECT frame_id, object_type, raw_label, bbox_norm FROM observations "
+                f"WHERE source='yolo' AND bbox_norm IS NOT NULL AND frame_id IN ({marks})", ids):
+            boxes[("yolo", _name(tax, raw, otype), fid)].append(json.loads(bbox))
+        outlines: dict[int, list] = defaultdict(list)                       # frame -> (type, conf, counted, mask)
+        for fid, raw, conf, counted, bbox, mask in conn.execute(
+                f"SELECT frame_id, raw_label, confidence, counted, bbox_norm, mask FROM detections "
+                f"WHERE frame_id IN ({marks})", ids):
+            name = _name(tax, raw, raw)
+            for lv in conf_levels:
+                if conf >= lv:
+                    out[fid][f"count.{level_source(lv)}.{name}"] += 1
+                    boxes[(level_source(lv), name, fid)].append(json.loads(bbox))
+            if mask is not None:
+                outlines[fid].append((name, conf, bool(counted), decode_mask(mask)))
+        for fid, masked in outlines.items():
+            for col, value in mask_features(masked, sources=mask_sources, min_iou=mask_dup_iou, grid=grid,
+                                            cell_min=cell_area_min).items():
+                out[fid][col] += value
+        for (src, name, fid), bs in boxes.items():
+            out[fid][f"area.{src}.{name}"] += round(union_area(bs), 5)
+        for fid, src, subj, p, o, rs, ro, n in conn.execute(
+                f"SELECT frame_id, source, subject, predicate, object, raw_subject, raw_object, count FROM relations "
+                f"WHERE frame_id IN ({marks})", ids):
+            out[fid][f"rel.{src}.{_name(tax, rs, subj)}.{p}.{_name(tax, ro, o)}"] += n
+    return {fid: dict(cols) for fid, cols in out.items()}
+
+
+def _frame_columns_cached(conn: sqlite3.Connection, tax: Taxonomy, stamps: dict[int, str], cache: FeatureCache | None,
+                          *, space_id: str, **kw) -> dict[int, dict[str, float]]:
+    """frame_columns() for the photos in `stamps`, taking unchanged photos from the cache when there is one."""
+    ids = list(stamps)
+    if cache is None:
+        return frame_columns(conn, tax, ids, **kw)
+    key = fingerprint(FEATURES_VERSION, space_id, kw["conf_levels"], kw["mask_sources"], kw["mask_dup_iou"], kw["grid"],
+                      kw["cell_area_min"], sorted(tax.known), tax.alias, tax.merged_into,
+                      {k: sorted(v) for k, v in tax.parents.items()})
+    have = cache.load(key, stamps)
+    missing = [f for f in ids if f not in have]
+    if missing:
+        fresh = frame_columns(conn, tax, missing, **kw)
+        cache.store(key, stamps, fresh)
+        have.update(fresh)
+    return have
+
+
 def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minutes: int = 15,
                 start: str | None = None, end: str | None = None, min_coverage: float = 0.5,
                 min_presence: float = 0.05, min_valid_slots: int = 8, min_present_slots: int = 3,
@@ -132,11 +203,16 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 cell_area_min: float = 0.02, embed_model: str | None = None, embed_components: int = 4,
                 embed_fit_end: str | None = None, probe_scorer: str | None = None,
                 probe_groups: dict[str, list[str]] | None = None,
-                calendar_spec: CalendarSpec = CalendarSpec()) -> TableResult:
+                calendar_spec: CalendarSpec = CalendarSpec(), cache: FeatureCache | None = None,
+                max_slots: int | None = None) -> TableResult:
+    """`cache` keeps each photo's derived columns between builds (same table, much faster). `max_slots` keeps only
+    the newest that many slots (after `start`/`end`), for callers that cannot use more history than that."""
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
                           pd.Timestamp(end) if end else frames.index.max(), freq=f"{step_minutes}min", name="timestamp")
+    if max_slots is not None and len(index) > max_slots:
+        index = index[-max_slots:]
     t = pd.DataFrame(index=index)
     t["slot_status"] = frames["status"].reindex(index).fillna("no_frame")
     t["frame_id"] = frames["frame_id"].reindex(index)
@@ -153,49 +229,15 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                  **{level_source(lv, "sam2"): outlined & level_ok[level_source(lv)] for lv in conf_levels}}
 
     fid_slot = {int(fid): slot for slot, fid in t.loc[valid, "frame_id"].items()}
-    blocks: dict[str, dict] = defaultdict(lambda: defaultdict(float))       # column -> {slot: value}
-
-    def add(col: str, slot, value: float) -> None:
-        blocks[col][slot] += value
-
-    if fid_slot:
-        marks = ",".join("?" * len(fid_slot))
-        ids = list(fid_slot)
-        for fid, src, otype, raw, cell, n in conn.execute(
-                f"SELECT frame_id, source, object_type, raw_label, cell_id, count FROM observations "
-                f"WHERE frame_id IN ({marks})", ids):
-            slot, name = fid_slot[fid], _name(tax, raw, otype)
-            add(f"count.{src}.{name}", slot, n)
-            for anc in tax.ancestors(name) | {name}:      # roll-up = the name itself + all is_a descendants
-                add(f"rollup.{src}.{anc}", slot, n)
-            if src == "yolo" and cell:
-                add(f"cell.yolo.{cell}.{name}", slot, n)
-        boxes: dict[tuple[str, str, object], list] = defaultdict(list)       # (source, name, slot) -> boxes
-        for fid, otype, raw, bbox in conn.execute(
-                f"SELECT frame_id, object_type, raw_label, bbox_norm FROM observations "
-                f"WHERE source='yolo' AND bbox_norm IS NOT NULL AND frame_id IN ({marks})", ids):
-            boxes[("yolo", _name(tax, raw, otype), fid_slot[fid])].append(json.loads(bbox))
-        outlines: dict[int, list] = defaultdict(list)                       # frame -> (type, conf, counted, mask)
-        for fid, raw, conf, counted, bbox, mask in conn.execute(
-                f"SELECT frame_id, raw_label, confidence, counted, bbox_norm, mask FROM detections "
-                f"WHERE frame_id IN ({marks})", ids):
-            slot, name = fid_slot[fid], _name(tax, raw, raw)
-            for lv in conf_levels:
-                if conf >= lv:
-                    add(f"count.{level_source(lv)}.{name}", slot, 1)
-                    boxes[(level_source(lv), name, slot)].append(json.loads(bbox))
-            if mask is not None:
-                outlines[fid].append((name, conf, bool(counted), decode_mask(mask)))
-        for fid, masked in outlines.items():
-            for col, value in mask_features(masked, sources=mask_sources, min_iou=mask_dup_iou, grid=grid,
-                                            cell_min=cell_area_min).items():
-                add(col, fid_slot[fid], value)
-        for (src, name, slot), bs in boxes.items():
-            add(f"area.{src}.{name}", slot, round(union_area(bs), 5))
-        for fid, src, s, p, o, rs, ro, n in conn.execute(
-                f"SELECT frame_id, source, subject, predicate, object, raw_subject, raw_object, count FROM relations "
-                f"WHERE frame_id IN ({marks})", ids):
-            add(f"rel.{src}.{_name(tax, rs, s)}.{p}.{_name(tax, ro, o)}", fid_slot[fid], n)
+    stamps = {int(fid): str(frames["processed_utc"].get(slot)) for slot, fid in t.loc[valid, "frame_id"].items()}
+    per_frame = _frame_columns_cached(conn, tax, stamps, cache, space_id=space_id, conf_levels=conf_levels,
+                                      mask_sources=mask_sources, mask_dup_iou=mask_dup_iou, grid=grid,
+                                      cell_area_min=cell_area_min)
+    blocks: dict[str, dict] = defaultdict(dict)                              # column -> {slot: value}
+    for fid, cols in per_frame.items():
+        slot = fid_slot[fid]
+        for col, value in cols.items():
+            blocks[col][slot] = value
 
     # keep only roll-ups for names that actually have is_a descendants (otherwise they duplicate count.*)
     has_children = {p for parents in tax.parents.values() for p in parents}
@@ -274,11 +316,13 @@ def _probe_columns(conn: sqlite3.Connection, space_id: str, index: pd.DatetimeIn
     if not scores:
         return empty
     name = re.sub(r"[^A-Za-z0-9_-]", "_", scorer)                    # a column source has no dots
-    cols = {f"probe.{name}.{c}": pd.Series(np.nan, index=index) for c in groups}
+    position = {slot: i for i, slot in enumerate(index)}
+    cols = {c: np.full(len(index), np.nan) for c in groups}
     for fid, by_prompt in scores.items():
+        row = position[fid_slot[fid]]
         for concept, value in concept_values(by_prompt, groups).items():
-            cols[f"probe.{name}.{concept}"].loc[fid_slot[fid]] = value
-    return pd.DataFrame(cols, index=index)
+            cols[concept][row] = value
+    return pd.DataFrame({f"probe.{name}.{c}": values for c, values in cols.items()}, index=index)
 
 
 def build_catalog(table: pd.DataFrame, *, min_coverage: float, min_presence: float, min_valid_slots: int,

@@ -21,6 +21,7 @@ class Paths(_Strict):
     db: str = "data/sbi.db"
     images: str = "data/images"
     logs: str = "data/logs"
+    cache: str = "data/cache"          # derived, safe to delete: rebuilt on the next table build
 
 
 class FrameSourceSettings(_Strict):
@@ -127,6 +128,8 @@ class ForecastSettings(_Strict):
     quantiles: list[float] = [0.1, 0.5, 0.9]
     horizon: int = Field(16, ge=1, le=1024)            # slots ahead (16 x 15 min = 4 h)
     min_context: int = Field(96, ge=8)                 # slots of history needed before forecasting (96 = 1 day)
+    max_context: int = Field(8192, ge=8)               # newest slots of history used (Chronos-2 reads at most 8192,
+                                                       # about 85 days of 15-minute slots)
     max_targets: int = Field(40, ge=1)                 # cap on forecast targets per space
     cross_learning: bool = False                       # let the model share information across targets (see docs)
     variant: str = "all"                               # covariate set for live forecasts
@@ -250,6 +253,10 @@ class Settings(_Strict):
     @property
     def log_dir(self) -> Path:
         return self.resolve(self.paths.logs)
+
+    @property
+    def cache_dir(self) -> Path:
+        return self.resolve(self.paths.cache)
 
 
 def load_dotenv(path: Path) -> None:
