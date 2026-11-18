@@ -38,6 +38,10 @@ Image-vector columns, when an embedder ran (see forecast/embed_features.py):
 They need no detector and no VLM, so they exist for every embedded frame. NaN for frames never embedded.
 The principal directions are fit on `embed_fit_end` and earlier when given, otherwise on the whole table.
 
+Steady columns, for the object types a space lists as not moving (see forecast/steady_features.py):
+  steady.all.<type>   median of the detector's and the VLM's counts of that type over the trailing day
+A per-photo count of furniture is mostly counting error; this is the number to read for "how many chairs".
+
 Probe columns, when a scorer ran (see forecast/probe_features.py):
   probe.<scorer>.<concept>   mean raw score of the concept's paraphrased prompts (SigLIP: a logit, 0 = even odds)
 Concepts come from the space file (`probes`). They are named, continuous descriptions of the scene (is it crowded,
@@ -68,12 +72,14 @@ from ..taxonomy import Taxonomy, load_taxonomy
 from .embed_features import embedding_features
 from .probe_features import concept_values
 from .mask_features import mask_features
+from .steady_features import pooled_median
 
 log = logging.getLogger(__name__)
 META = ["slot_status", "frame_id", "vlm_ok"]
 CAT_COLUMNS = ["lighting", "door_state", "tidiness", "weather_visible"]
 COUNT_KINDS = {"count", "rollup", "cell", "rel", "area", "cellarea"}
-OBJECT_KINDS = {"count", "rollup", "cell", "area", "cellarea"}   # families whose last name part is an object type
+OBJECT_KINDS = {"count", "rollup", "cell", "area", "cellarea", "steady"}   # families whose last name part is an object type
+STEADY_SOURCES = ("yolo", "vlm")                                 # the counters pooled into steady.all.<type>
 _LEVEL = re.compile(r"_c\d\d$")
 
 
@@ -132,7 +138,8 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
                 cell_area_min: float = 0.02, embed_model: str | None = None, embed_components: int = 4,
                 embed_fit_end: str | None = None, probe_scorer: str | None = None,
                 probe_groups: dict[str, list[str]] | None = None,
-                calendar_spec: CalendarSpec = CalendarSpec()) -> TableResult:
+                calendar_spec: CalendarSpec = CalendarSpec(), steady_labels: tuple[str, ...] = (),
+                steady_window: int = 96, steady_min_values: int = 24) -> TableResult:
     tax = load_taxonomy(conn)
     frames = _pick_frames(conn, space_id, tz, step_minutes)
     index = pd.date_range(pd.Timestamp(start) if start else frames.index.min(),
@@ -209,6 +216,13 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
         src = col.split(".")[1]
         counts.loc[~(vlm_ok if src == "vlm" else source_ok.get(src, valid)), col] = np.nan
 
+    steady = {}
+    for name in steady_labels:
+        cols = [c for c in (f"count.{src}.{name}" for src in STEADY_SOURCES) if c in counts.columns]
+        if cols:
+            steady[f"steady.all.{name}"] = pooled_median(counts[cols].to_numpy(float), steady_window, steady_min_values)
+    steady_w = pd.DataFrame(steady, index=index)
+
     scene = pd.read_sql_query(
         "SELECT frame_id, people_yolo, people_vlm, vehicles_yolo, count_disagree, lighting, door_state, tidiness, "
         "weather_visible, attrs_json FROM scene_state WHERE space_id=?", conn, params=(space_id,))
@@ -235,7 +249,7 @@ def build_table(conn: sqlite3.Connection, space_id: str, *, tz: str, step_minute
 
     def family(prefix: str) -> list[str]:
         return sorted(c for c in counts.columns if c.startswith(prefix))
-    ordered = pd.concat([num.reindex(index), img, counts[family("count.")], counts[family("area.")],
+    ordered = pd.concat([num.reindex(index), img, steady_w, counts[family("count.")], counts[family("area.")],
                          counts[family("rollup.")], counts[family("cell.")],
                          counts[family("cellarea.")], counts[family("rel.")], cats, feat_w, emb_w, probe_w], axis=1)
     table = pd.concat([t, ordered], axis=1)

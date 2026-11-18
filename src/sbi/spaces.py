@@ -57,6 +57,10 @@ class SpaceConfig(_Strict):
     # What to forecast: table column names or shell-style patterns ("count.yolo.*", "probe.*.people"). Patterns
     # are matched against the table's model-ready columns when a forecast runs, so new object types are picked up.
     forecast_targets: list[str] = []
+    # Object types that stay put (furniture, fixtures). A per-photo count of these is mostly counting error, so the
+    # table also carries steady.all.<type>: the median of every counter's readings over the last day.
+    # Omitted = every vocabulary type whose mobility is `fixed`.
+    steady_types: list[str] | None = None
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "SpaceConfig":
@@ -80,6 +84,11 @@ class SpaceConfig(_Strict):
                 problems.append(f"mask region {r} must be normalised [x1,y1,x2,y2] with x1<x2, y1<y2")
         if any(not t.strip() for t in self.forecast_targets) or len(set(self.forecast_targets)) != len(self.forecast_targets):
             problems.append("forecast_targets must be distinct, non-empty column names or patterns")
+        for t in self.steady_types or []:
+            if t not in self.vocabulary:
+                problems.append(f"steady_types entry {t!r} not in vocabulary")
+        if len(set(self.steady_types or [])) != len(self.steady_types or []):
+            problems.append("steady_types repeats an entry")
         seen: dict[str, str] = {}
         for concept, prompts in self.probes.items():
             if not _LABEL.match(concept):
@@ -100,6 +109,13 @@ class SpaceConfig(_Strict):
         if problems:
             raise ValueError("; ".join(problems))
         return self
+
+    @property
+    def steady_labels(self) -> list[str]:
+        """Object types counted steadily: `steady_types` when given, else the vocabulary's fixed types."""
+        if self.steady_types is not None:
+            return list(self.steady_types)
+        return [label for label, spec in self.vocabulary.items() if spec.mobility == "fixed"]
 
     @property
     def probe_prompts(self) -> list[str]:

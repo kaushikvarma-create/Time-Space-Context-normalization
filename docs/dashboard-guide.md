@@ -32,8 +32,13 @@ Below the header:
 ### Latest photo
 The newest captured photo of the space, so the numbers can be compared with what the camera saw.
 
+### "In the room, steady over 24 hours"
+The line under the photo lists the things that do not move, such as chairs, monitors and desks, with a **steady count**: the middle value of every counter's readings (detector and VLM) over the last 24 hours. Use this for "how many chairs are there".
+
+A per-photo count of furniture is not reliable. In the admin cabin, which has 7 chairs, the detector reported between 4 and 10: it mistakes dark shapes for chairs at night and loses chairs hidden behind people by day. The VLM errs the other way, so the middle of both over a day lands on the true number. A real change (a chair taken away) shows up after about half a day. Which types count as "not moving" is the `steady_types` list in the space's settings file.
+
 ### The four tiles
-The four **headline series** for the space: the ones named in the space's settings file, then the object types counted most often. Each tile keeps the same colour as its chart below.
+The four **headline series** for the space: the scene totals named in the space's settings file, then the moving object types counted most often. Things that do not move are left out here because their count is a constant. Each tile keeps the same colour as its chart below.
 
 | Part | Meaning |
 |---|---|
@@ -208,7 +213,8 @@ Reasons a dimension is "table only":
 | Family | Example column | Meaning |
 |---|---|---|
 | scene | `scene.people_yolo` | Totals per photo: people by the detector, people by the VLM, vehicles by the detector, and `count_disagree` (1 when the detector's and the VLM's people counts differ by more than 1). |
-| count | `count.yolo.chair` | Number of objects of one type. Source `yolo` = detector boxes with confidence 0.25 or more; `yolo_c05` and `yolo_c10` = all boxes down to 0.05 or 0.10; `vlm` = the VLM's own count; `sam2` = detector count after removing boxes that outline the same object twice. |
+| steady | `steady.all.chair` | Count of a type that does not move, steadied: the middle value of the detector's and the VLM's counts over the last 24 hours. Changes only when the room really changes. |
+| count | `count.yolo.chair` | Number of objects of one type in this one photo. For furniture this jumps around from counting error; read `steady` instead. Source `yolo` = detector boxes with confidence 0.25 or more; `yolo_c05` and `yolo_c10` = all boxes down to 0.05 or 0.10; `vlm` = the VLM's own count; `sam2` = detector count after removing boxes that outline the same object twice. |
 | rollup | `rollup.yolo.screen` | Count of a group: the type itself plus every type the vocabulary files under it (for example everything that is a kind of screen). |
 | area | `area.sam2.person` | Share of the picture covered by that type, from 0 to 1. `sam2` uses outlines (accurate); `yolo` uses boxes (rougher). |
 | cell | `cell.yolo.R5C7.person` | Count of a type in one grid cell. The picture is divided into a grid (cabin 8 x 6, parking 12 x 8); R5C7 = row 5, column 7, counted from the top-left starting at 0. This says where things are. |

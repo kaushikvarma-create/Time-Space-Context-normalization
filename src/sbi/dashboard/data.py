@@ -99,7 +99,7 @@ def backtest_overall(exports: Path, space_id: str) -> pd.DataFrame:
 # ------------------------------------------------------------------ v1.1 dashboard: now, forecast, pipeline, columns
 
 SOURCE_NAMES = {"yolo": "detector", "vlm": "VLM", "sam2": "outline", "geometry": "geometry"}
-KIND_NAMES = {"scene": "Scene totals", "count": "Counts per object type", "rollup": "Counts per object group",
+KIND_NAMES = {"scene": "Scene totals", "steady": "Steady counts of things that do not move", "count": "Counts per object type", "rollup": "Counts per object group",
               "area": "Area covered per type", "cell": "Counts per grid cell", "cellarea": "Area per grid cell",
               "rel": "Relations between objects", "img": "Image statistics", "cat": "Scene fields (text)",
               "emb": "Image vector", "probe": "Scene description scores", "cal": "Calendar", "feat": "Other features"}
@@ -119,6 +119,8 @@ def label(column: str) -> str:
     if kind == "scene":
         name, _, source = parts[1].rpartition("_")
         return f"{name} ({SOURCE_NAMES[source]})" if source in SOURCE_NAMES and name else parts[1].replace("_", " ")
+    if kind == "steady" and len(parts) == 3:
+        return f"{parts[2]} count (steady, 24 h)"
     if kind in ("count", "rollup") and len(parts) == 3:
         return f"{parts[2]} count ({src})"
     if kind == "area" and len(parts) == 3:
@@ -346,3 +348,15 @@ def header_status(conn: sqlite3.Connection, spaces: list[SpaceConfig], now_utc: 
                          state="live" if age <= 20 else "late" if age <= 60 else "stopped")
         out.append(entry)
     return out
+
+
+def fixtures(table: pd.DataFrame) -> list[tuple[str, int]]:
+    """(object type, latest steady count) for the things that do not move, most numerous first; types the room
+    does not have (count 0) and types without a steady count yet are left out."""
+    out = []
+    for col in table.columns:
+        if col.startswith("steady."):
+            s = pd.to_numeric(table[col], errors="coerce").dropna()
+            if len(s) and s.iloc[-1] > 0:
+                out.append((col.split(".")[-1], int(s.iloc[-1])))
+    return sorted(out, key=lambda x: (-x[1], x[0]))
